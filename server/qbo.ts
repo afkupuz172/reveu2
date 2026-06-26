@@ -17,6 +17,25 @@ const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const AUTH_URL = "https://appcenter.intuit.com/connect/oauth2";
 const SCOPE = "com.intuit.quickbooks.accounting";
 
+// The QBO sandbox throttles concurrent requests, so run them one-at-a-time
+// through a chain and retry on 429 with backoff. Combined with the response
+// cache, this keeps the dashboard well under the limit.
+let qboChain: Promise<unknown> = Promise.resolve();
+async function qboFetch(url: string, init: RequestInit): Promise<Response> {
+  const run = qboChain.then(async () => {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(url, init);
+      if (res.status !== 429 || attempt >= 3) return res;
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  });
+  qboChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 /** Credentials present — the connect flow can run. */
 export function hasCredentials(): boolean {
   return Boolean(CID && SECRET);
@@ -65,9 +84,20 @@ export async function exchangeCode(code: string, realmId: string): Promise<void>
 // --- Token refresh + queries ------------------------------------------------
 
 let cachedToken: { token: string; expires: number } | null = null;
+let refreshing: Promise<string> | null = null;
 
+// Intuit rotates the refresh token on every use, so concurrent refreshes race
+// and invalidate each other. Single-flight: callers share one in-flight refresh.
 async function accessToken(): Promise<string> {
   if (cachedToken && cachedToken.expires > Date.now()) return cachedToken.token;
+  if (refreshing) return refreshing;
+  refreshing = doRefresh().finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
+}
+
+async function doRefresh(): Promise<string> {
   const stored = loadToken();
   if (!stored) throw new Error("QuickBooks not connected — visit /api/qbo/connect first.");
   const res = await fetch(TOKEN_URL, {
@@ -81,7 +111,7 @@ async function accessToken(): Promise<string> {
   });
   if (!res.ok) throw new Error(`QBO token refresh failed: ${res.status} ${await res.text()}`);
   const j = (await res.json()) as { access_token: string; expires_in: number; refresh_token?: string };
-  // Intuit rotates refresh tokens — persist the new one so we don't go stale.
+  // Persist the rotated refresh token so we don't go stale across restarts.
   if (j.refresh_token && j.refresh_token !== stored.refreshToken) {
     saveToken({ refreshToken: j.refresh_token, realmId: stored.realmId });
   }
@@ -94,7 +124,7 @@ async function query<T>(q: string): Promise<T> {
   if (!stored) throw new Error("QuickBooks not connected.");
   const token = await accessToken();
   const url = `${BASE}/v3/company/${stored.realmId}/query?query=${encodeURIComponent(q)}&minorversion=70`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+  const res = await qboFetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
   if (!res.ok) throw new Error(`QBO query failed: ${res.status} ${await res.text()}`);
   return res.json() as Promise<T>;
 }
@@ -110,7 +140,7 @@ export async function qboCreate<T = unknown>(entity: string, body: unknown): Pro
   if (!stored) throw new Error("QuickBooks not connected.");
   const token = await accessToken();
   const url = `${BASE}/v3/company/${stored.realmId}/${entity}?minorversion=70`;
-  const res = await fetch(url, {
+  const res = await qboFetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),

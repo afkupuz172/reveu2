@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "seed": "tsx scripts/seed.ts",
+    "seed:qbo": "tsx scripts/seedQbo.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
