@@ -1,4 +1,5 @@
-import type { ClientSummary } from "../../shared/types";
+import { useState } from "react";
+import type { ClientSummary, MergedInvoice } from "../../shared/types";
 
 const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
 const date = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -24,27 +25,57 @@ export function DealsTable({ deals }: { deals: ClientSummary["deals"] }) {
   );
 }
 
+type InvSortKey = "number" | "amount" | "status" | "source" | "date";
+
 export function InvoicesTable({ invoices }: { invoices: ClientSummary["invoices"] }) {
+  const [sort, setSort] = useState<{ key: InvSortKey; dir: 1 | -1 }>({ key: "date", dir: -1 });
   if (!invoices.length) return <div className="empty">No invoices.</div>;
   const cls = (s: string) => (s === "paid" ? "good" : s === "overdue" ? "risk" : "warn");
+
+  const val = (inv: MergedInvoice, key: InvSortKey): string | number =>
+    key === "amount" ? inv.amount : key === "date" ? new Date(inv.date).getTime() : (inv[key] as string);
+  const sorted = [...invoices].sort((a, b) => {
+    const av = val(a, sort.key);
+    const bv = val(b, sort.key);
+    return av < bv ? -sort.dir : av > bv ? sort.dir : 0;
+  });
+  const onSort = (key: InvSortKey) =>
+    setSort((s) => ({ key, dir: s.key === key ? ((s.dir === 1 ? -1 : 1) as 1 | -1) : 1 }));
+  const arrow = (key: InvSortKey) => (sort.key === key ? (sort.dir === 1 ? " ▲" : " ▼") : "");
+  const Th = ({ k, label }: { k: InvSortKey; label: string }) => (
+    <th className="sortable" onClick={() => onSort(k)}>
+      {label}
+      {arrow(k)}
+    </th>
+  );
+
   return (
-    <table>
-      <thead>
-        <tr><th>Invoice</th><th>Amount</th><th>Status</th><th>Source</th><th>Date</th><th></th></tr>
-      </thead>
-      <tbody>
-        {invoices.slice().reverse().map((inv, i) => (
-          <tr key={i}>
-            <td>{inv.number}</td>
-            <td>{usd(inv.amount)}</td>
-            <td><span className={`badge ${cls(inv.status)}`}>{inv.status}</span></td>
-            <td><span className={`badge ${inv.source === "stripe" ? "stripe" : "qbo"}`}>{inv.source === "stripe" ? "Stripe" : "QuickBooks"}</span></td>
-            <td className="muted">{date(inv.date)}</td>
-            <td>{inv.pdfUrl ? <a href={inv.pdfUrl} target="_blank" rel="noreferrer">PDF</a> : null}</td>
+    <div className="scroll-box">
+      <table>
+        <thead>
+          <tr>
+            <Th k="number" label="Invoice" />
+            <Th k="amount" label="Amount" />
+            <Th k="status" label="Status" />
+            <Th k="source" label="Source" />
+            <Th k="date" label="Date" />
+            <th></th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {sorted.map((inv, i) => (
+            <tr key={i}>
+              <td>{inv.number}</td>
+              <td>{usd(inv.amount)}</td>
+              <td><span className={`badge ${cls(inv.status)}`}>{inv.status}</span></td>
+              <td><span className={`badge ${inv.source === "stripe" ? "stripe" : "qbo"}`}>{inv.source === "stripe" ? "Stripe" : "QuickBooks"}</span></td>
+              <td className="muted">{date(inv.date)}</td>
+              <td>{inv.pdfUrl ? <a href={inv.pdfUrl} target="_blank" rel="noreferrer">PDF</a> : null}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

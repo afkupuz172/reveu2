@@ -3,6 +3,7 @@ import { fetchClient, fetchClients, fetchResolve } from "./api";
 import type { ClientListItem, ClientSummary, CompanyResolution } from "../shared/types";
 import Dashboard from "./components/Dashboard";
 import Sidebar from "./components/Sidebar";
+import CompanySelect from "./components/CompanySelect";
 import DetailsModal, { type ContribField } from "./components/DetailsModal";
 
 export default function App() {
@@ -65,13 +66,7 @@ export default function App() {
         <h1>
           ReVue<span style={{ color: "var(--accent)" }}>2</span>
         </h1>
-        <select value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
+        <CompanySelect companies={clients} value={companyId} onChange={setCompanyId} />
         <div className="spacer" />
         <label className="toggle">
           <input type="checkbox" checked={admin} onChange={(e) => setAdmin(e.target.checked)} />

@@ -48,6 +48,27 @@ body {
 .modal-head h3 { margin: 0; font-size: 16px; }
 .modal-close { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
 .modal tfoot td { border-top: 2px solid var(--line); border-bottom: none; padding-top: 10px; }
+.formula { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 8px 0 14px; }
+
+/* Searchable company combobox */
+.combo { position: relative; }
+.combo-input { width: 230px; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+.combo-input:focus { outline: 2px solid var(--accent); }
+.combo-list { position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px; z-index: 30;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  max-height: 300px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.combo-opt { padding: 8px 12px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
+.combo-opt:hover, .combo-opt.sel { background: var(--panel-2); }
+.combo-dom { font-size: 12px; }
+.combo-empty { padding: 10px 12px; }
+
+/* Scrollable + sortable invoices */
+.scroll-box { max-height: 320px; overflow-y: auto; }
+.scroll-box thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--text); }
 
 header.top {
   display: flex; align-items: center; gap: 16px;
