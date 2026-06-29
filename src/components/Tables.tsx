@@ -4,24 +4,86 @@ import type { ClientSummary, MergedInvoice } from "../../shared/types";
 const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
 const date = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
+const payClass = (s: string) =>
+  s === "Paid" ? "good" : s === "Overdue" ? "risk" : s === "Pending" ? "warn" : "muted";
+
+function ProductCells({ products }: { products: ClientSummary["deals"][number]["products"] }) {
+  if (!products.length) return <span className="muted">—</span>;
+  const title = products.map((p) => `${p.name} ×${p.quantity} (${usd(p.amount)})`).join("\n");
+  return (
+    <span title={title}>
+      {products[0].name}
+      {products.length > 1 && <span className="muted"> +{products.length - 1}</span>}
+    </span>
+  );
+}
+
 export function DealsTable({ deals }: { deals: ClientSummary["deals"] }) {
   if (!deals.length) return <div className="empty">No deals.</div>;
   return (
-    <table>
-      <thead>
-        <tr><th>Deal</th><th>Stage</th><th>Amount</th><th>Close</th></tr>
-      </thead>
-      <tbody>
-        {deals.map((d, i) => (
-          <tr key={i}>
-            <td>{d.name}</td>
-            <td className="muted">{d.stage}</td>
-            <td>{usd(d.amount)}</td>
-            <td className="muted">{date(d.closeDate)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="scroll-box">
+      <table>
+        <thead>
+          <tr><th>Deal</th><th>Stage</th><th>Amount</th><th>Payment</th><th>Products</th><th>Close</th></tr>
+        </thead>
+        <tbody>
+          {deals.map((d, i) => (
+            <tr key={i}>
+              <td>{d.name}</td>
+              <td>
+                <div>{d.stageLabel}</div>
+                <div className="muted" style={{ fontSize: 11 }}>
+                  {d.pipeline} · {d.probability}%
+                </div>
+              </td>
+              <td>{usd(d.amount)}</td>
+              <td><span className={`badge ${payClass(d.paymentStatus)}`}>{d.paymentStatus}</span></td>
+              <td><ProductCells products={d.products} /></td>
+              <td className="muted">{date(d.closeDate)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Pipeline activity: open deals grouped by stage (ordered by probability), with
+// count, value bar, and a probability-weighted pipeline total.
+export function PipelineCard({ deals }: { deals: ClientSummary["deals"] }) {
+  const open = deals.filter((d) => !d.isClosed);
+  if (!open.length) return <div className="empty">No open deals in the pipeline.</div>;
+  const byStage = new Map<string, { label: string; prob: number; count: number; value: number }>();
+  for (const d of open) {
+    const e = byStage.get(d.stageLabel) ?? { label: d.stageLabel, prob: d.probability, count: 0, value: 0 };
+    e.count += 1;
+    e.value += d.amount;
+    byStage.set(d.stageLabel, e);
+  }
+  const stages = [...byStage.values()].sort((a, b) => a.prob - b.prob);
+  const max = Math.max(1, ...stages.map((s) => s.value));
+  const weighted = open.reduce((a, d) => a + (d.amount * d.probability) / 100, 0);
+  return (
+    <div>
+      {stages.map((s) => (
+        <div className="factor" key={s.label}>
+          <div className="row">
+            <span>
+              {s.label} <span className="muted">· {s.count}</span>
+            </span>
+            <span>
+              {usd(s.value)} <span className="muted">· {s.prob}%</span>
+            </span>
+          </div>
+          <div className="bar">
+            <div style={{ width: `${(s.value / max) * 100}%`, background: "var(--accent)" }} />
+          </div>
+        </div>
+      ))}
+      <div className="muted" style={{ marginTop: 10 }}>
+        Weighted pipeline (by probability): {usd(weighted)}
+      </div>
+    </div>
   );
 }
 

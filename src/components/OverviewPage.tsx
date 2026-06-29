@@ -7,13 +7,21 @@ const bandClass = (b: string) => (b === "Good" ? "good" : b === "Action needed" 
 const srcLabel = (s: string) => (s === "stripe" ? "Stripe" : s === "quickbooks" ? "QuickBooks" : "None");
 const srcClass = (s: string) => (s === "stripe" ? "stripe" : s === "quickbooks" ? "qbo" : "muted");
 
-type SortKey = "name" | "nrr" | "billingSource" | "band" | "outstanding" | "aligned";
+type SortKey = "name" | "nrr" | "billingSource" | "band" | "outstanding" | "aligned" | "openDealValue" | "paymentsDue";
 
 export default function OverviewPage({ data, onOpen }: { data: Overview; onOpen: (id: string) => void }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "name", dir: 1 });
 
   const val = (r: OverviewRow, k: SortKey): string | number =>
-    k === "nrr" ? (r.nrr ?? -1) : k === "outstanding" ? r.outstanding : k === "aligned" ? (r.aligned ? 1 : 0) : (r[k] as string);
+    k === "nrr"
+      ? r.nrr ?? -1
+      : k === "outstanding" || k === "openDealValue" || k === "paymentsDue"
+        ? (r[k] as number)
+        : k === "aligned"
+          ? r.aligned
+            ? 1
+            : 0
+          : (r[k] as string);
   const sorted = [...data.companies].sort((a, b) => {
     const av = val(a, sort.key);
     const bv = val(b, sort.key);
@@ -67,6 +75,8 @@ export default function OverviewPage({ data, onOpen }: { data: Overview; onOpen:
               <Th k="band" label="Status" />
               <Th k="nrr" label="NRR" />
               <Th k="outstanding" label="Outstanding" />
+              <Th k="openDealValue" label="Open deals" />
+              <Th k="paymentsDue" label="Payments due" />
               <Th k="aligned" label="Alignment" />
             </tr>
           </thead>
@@ -82,6 +92,18 @@ export default function OverviewPage({ data, onOpen }: { data: Overview; onOpen:
                 </td>
                 <td>{r.nrr != null ? `${r.nrr}%` : "—"}</td>
                 <td>{usd(r.outstanding)}</td>
+                <td>
+                  {r.openDealCount > 0 ? (
+                    <>
+                      {usd(r.openDealValue)} <span className="muted">· {r.openDealCount}</span>
+                    </>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
+                <td>
+                  {r.paymentsDue > 0 ? <span className="badge warn">{r.paymentsDue} due</span> : <span className="muted">—</span>}
+                </td>
                 <td>
                   {r.aligned ? (
                     <span className="badge good">Aligned</span>

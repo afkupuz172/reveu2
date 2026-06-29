@@ -16,6 +16,7 @@ export interface OverviewRowResult {
 // One company's overview row + its this-year/last-year revenue buckets.
 export function buildOverviewRow(raw: RawClientData): OverviewRowResult {
   const s = assembleSummary(raw);
+  const openDeals = s.deals.filter((d) => !d.isClosed);
   const row: OverviewRow = {
     id: s.company.id,
     name: s.company.name,
@@ -27,6 +28,9 @@ export function buildOverviewRow(raw: RawClientData): OverviewRowResult {
     lifetimeSpend: s.kpis.lifetimeSpend,
     conflicts: s.billing.conflicts.length,
     aligned: s.billing.conflicts.length === 0,
+    openDealCount: openDeals.length,
+    openDealValue: openDeals.reduce((a, d) => a + d.amount, 0),
+    paymentsDue: s.deals.filter((d) => d.paymentStatus === "Pending" || d.paymentStatus === "Overdue").length,
   };
 
   const now = new Date();

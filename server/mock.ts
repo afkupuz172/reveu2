@@ -5,9 +5,42 @@
 //   orbit  — no Stripe; TWO QBO candidates (name vs name+domain)
 //   acme   — stored Stripe reference id + a clean QBO match
 
-import type { CompanyResolution, Contact, RawClientData } from "../shared/types";
+import type { CompanyResolution, Contact, Deal, DealProduct, PaymentStatus, RawClientData } from "../shared/types";
 import { rankCandidates, type ResourceRecord } from "./match";
 import { combineResources } from "./combine";
+
+const STAGE_META: Record<string, { label: string; prob: number; closed: boolean; won: boolean }> = {
+  qualifiedtobuy: { label: "Qualified to buy", prob: 20, closed: false, won: false },
+  presentationscheduled: { label: "Presentation scheduled", prob: 60, closed: false, won: false },
+  decisionmakerboughtin: { label: "Decision maker bought-in", prob: 80, closed: false, won: false },
+  contractsent: { label: "Contract sent", prob: 90, closed: false, won: false },
+  closedwon: { label: "Closed won", prob: 100, closed: true, won: true },
+  closedlost: { label: "Closed lost", prob: 0, closed: true, won: false },
+};
+
+function mkDeal(
+  name: string,
+  stage: string,
+  amount: number,
+  closeDate: string,
+  paymentStatus: PaymentStatus,
+  products: DealProduct[],
+): Deal {
+  const m = STAGE_META[stage] ?? { label: stage, prob: 50, closed: false, won: false };
+  return {
+    name,
+    stage,
+    stageLabel: m.label,
+    pipeline: "Sales Pipeline",
+    probability: m.prob,
+    isClosed: m.closed,
+    isWon: m.won,
+    amount,
+    closeDate,
+    paymentStatus,
+    products,
+  };
+}
 
 function isoMonthsAgo(n: number): string {
   const d = new Date();
@@ -62,8 +95,12 @@ const COMPANIES: Record<string, MockCompany> = {
     references: { stripeCustomerId: "cus_acme", quickbooksCustomerId: null },
     lastActivityDays: 6,
     deals: [
-      { name: "Pro renewal 2026", stage: "closedwon", amount: 14400, closeDate: isoMonthsAgo(11) },
-      { name: "Add-on seats", stage: "presentationscheduled", amount: 3600, closeDate: isoDaysFromNow(20) },
+      mkDeal("Pro renewal 2026", "closedwon", 14400, isoMonthsAgo(11), "Paid", [
+        { name: "Pro Plan (annual)", quantity: 1, amount: 14400 },
+      ]),
+      mkDeal("Add-on seats", "presentationscheduled", 3600, isoDaysFromNow(20), "Not invoiced", [
+        { name: "Additional seats", quantity: 6, amount: 3600 },
+      ]),
     ],
     tickets: [{ subject: "API rate limit question", status: "closed", createdAt: isoMonthsAgo(1) }],
   },
@@ -73,8 +110,13 @@ const COMPANIES: Record<string, MockCompany> = {
     references: { stripeCustomerId: null, quickbooksCustomerId: null },
     lastActivityDays: 9,
     deals: [
-      { name: "Growth plan", stage: "closedwon", amount: 12000, closeDate: isoMonthsAgo(8) },
-      { name: "Enterprise upgrade", stage: "decisionmakerboughtin", amount: 24000, closeDate: isoDaysFromNow(40) },
+      mkDeal("Growth plan", "closedwon", 12000, isoMonthsAgo(8), "Overdue", [
+        { name: "Growth Plan (annual)", quantity: 1, amount: 12000 },
+      ]),
+      mkDeal("Enterprise upgrade", "decisionmakerboughtin", 24000, isoDaysFromNow(40), "Pending", [
+        { name: "Enterprise license", quantity: 1, amount: 18000 },
+        { name: "Onboarding services", quantity: 1, amount: 6000 },
+      ]),
     ],
     tickets: [
       { subject: "Billing discrepancy", status: "open", createdAt: isoDaysFromNow(-9) },
@@ -86,7 +128,11 @@ const COMPANIES: Record<string, MockCompany> = {
     contacts: [{ name: "Pat Gomez", email: "pat@orbitlogistics.com", title: "Owner" }],
     references: { stripeCustomerId: null, quickbooksCustomerId: null },
     lastActivityDays: 14,
-    deals: [{ name: "New business", stage: "qualifiedtobuy", amount: 18000, closeDate: isoDaysFromNow(55) }],
+    deals: [
+      mkDeal("New business", "qualifiedtobuy", 18000, isoDaysFromNow(55), "Not invoiced", [
+        { name: "Logistics Pro (annual)", quantity: 1, amount: 18000 },
+      ]),
+    ],
     tickets: [],
   },
 };

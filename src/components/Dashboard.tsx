@@ -1,6 +1,6 @@
 import type { ClientSummary, Conflict, HealthBand } from "../../shared/types";
 import { ArAgingBars, HealthFactors, InvoiceChart, RevenueChart } from "./Charts";
-import { DealsTable, InvoicesTable, TicketsTable } from "./Tables";
+import { DealsTable, InvoicesTable, PipelineCard, TicketsTable } from "./Tables";
 import type { ContribField } from "./DetailsModal";
 
 const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
@@ -173,8 +173,9 @@ export default function Dashboard({
       {/* Detail tables */}
       <div className="grid cols-2">
         <div className="card"><h2>Invoices</h2><InvoicesTable invoices={data.invoices} /></div>
-        <div className="card"><h2>Open deals</h2><DealsTable deals={data.deals} /></div>
+        <div className="card"><h2>Pipeline activity</h2><PipelineCard deals={data.deals} /></div>
       </div>
+      <div className="card"><h2>Deals &amp; products</h2><DealsTable deals={data.deals} /></div>
       <div className="card"><h2>Support tickets</h2><TicketsTable tickets={data.tickets} /></div>
     </div>
   );

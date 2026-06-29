@@ -4,6 +4,29 @@ export type LinkStatus = "linked" | "fuzzy" | "unlinked";
 export type HealthBand = "Good" | "Action needed" | "At risk";
 export type InvoiceStatus = "paid" | "open" | "overdue";
 export type DataSource = "stripe" | "quickbooks";
+export type PaymentStatus = "Paid" | "Pending" | "Overdue" | "Not invoiced";
+
+// A product/line item attached to a deal.
+export interface DealProduct {
+  name: string;
+  quantity: number;
+  amount: number;
+}
+
+// A HubSpot deal enriched with pipeline stage, products, and payment status.
+export interface Deal {
+  name: string;
+  stage: string; // internal stage id (e.g. "closedwon")
+  stageLabel: string; // human label (e.g. "Closed won")
+  pipeline: string; // pipeline label
+  probability: number; // 0–100
+  isClosed: boolean;
+  isWon: boolean;
+  amount: number;
+  closeDate: string;
+  paymentStatus: PaymentStatus;
+  products: DealProduct[];
+}
 
 // A/R aging buckets (QuickBooks-derived; Stripe has no equivalent).
 export interface ArAging {
@@ -64,7 +87,7 @@ export interface RawClientData {
   };
   link: { status: LinkStatus; stripeCustomerId: string | null };
   lastActivityDays: number;
-  deals: { name: string; stage: string; amount: number; closeDate: string }[];
+  deals: Deal[];
   tickets: { subject: string; status: string; createdAt: string }[];
   stripe: {
     subscriptions: {
@@ -132,6 +155,9 @@ export interface OverviewRow {
   lifetimeSpend: number;
   conflicts: number; // Stripe<->QBO disagreements
   aligned: boolean; // false when conflicts > 0
+  openDealCount: number;
+  openDealValue: number; // sum of open (not-closed) deal amounts
+  paymentsDue: number; // count of deals with Pending/Overdue payment
 }
 
 export interface Overview {

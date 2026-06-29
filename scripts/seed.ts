@@ -38,7 +38,13 @@ interface Persona {
   plan: string | null;
   mrr: number;
   overdue: boolean;
-  deals: { name: string; stage: string; amount: number }[];
+  deals: {
+    name: string;
+    stage: string;
+    amount: number;
+    payment: "Paid" | "Pending" | "Overdue" | "Not invoiced";
+    products: { name: string; quantity: number; amount: number }[];
+  }[];
   tickets: { subject: string; stage: string }[];
 }
 
@@ -51,8 +57,8 @@ const PERSONAS: Persona[] = [
     mrr: 1200,
     overdue: false,
     deals: [
-      { name: "Pro renewal 2026", stage: "closedwon", amount: 14400 },
-      { name: "Add-on seats", stage: "presentationscheduled", amount: 3600 },
+      { name: "Pro renewal 2026", stage: "closedwon", amount: 14400, payment: "Paid", products: [{ name: "Pro Plan (annual)", quantity: 1, amount: 14400 }] },
+      { name: "Add-on seats", stage: "presentationscheduled", amount: 3600, payment: "Not invoiced", products: [{ name: "Additional seats", quantity: 6, amount: 3600 }] },
     ],
     tickets: [{ subject: "API rate limit question", stage: "4" }],
   },
@@ -65,8 +71,8 @@ const PERSONAS: Persona[] = [
     overdue: true,
     // closed-won ($12k) deliberately != annualized Stripe ($9k) to demo reconciliation.
     deals: [
-      { name: "Growth plan", stage: "closedwon", amount: 12000 },
-      { name: "Enterprise upgrade", stage: "decisionmakerboughtin", amount: 24000 },
+      { name: "Growth plan", stage: "closedwon", amount: 12000, payment: "Overdue", products: [{ name: "Growth Plan (annual)", quantity: 1, amount: 12000 }] },
+      { name: "Enterprise upgrade", stage: "decisionmakerboughtin", amount: 24000, payment: "Pending", products: [{ name: "Enterprise license", quantity: 1, amount: 18000 }, { name: "Onboarding services", quantity: 1, amount: 6000 }] },
     ],
     tickets: [
       { subject: "Billing discrepancy", stage: "1" },
@@ -80,7 +86,7 @@ const PERSONAS: Persona[] = [
     plan: null, // intentionally unlinked — no Stripe customer
     mrr: 0,
     overdue: false,
-    deals: [{ name: "New business", stage: "qualifiedtobuy", amount: 18000 }],
+    deals: [{ name: "New business", stage: "qualifiedtobuy", amount: 18000, payment: "Not invoiced", products: [{ name: "Logistics Pro (annual)", quantity: 1, amount: 18000 }] }],
     tickets: [],
   },
 ];
@@ -98,6 +104,30 @@ async function ensureStripeIdProperty() {
       groupName: "companyinformation",
     });
     console.log(`✓ Created HubSpot property "${STRIPE_ID_PROP}".`);
+  }
+}
+
+const DEAL_PAYMENT_PROP = process.env.HUBSPOT_DEAL_PAYMENT_PROPERTY || "payment_status";
+
+async function ensurePaymentStatusProperty() {
+  try {
+    await hs.crm.properties.coreApi.getByName("deals", DEAL_PAYMENT_PROP);
+    console.log(`✓ HubSpot deal property "${DEAL_PAYMENT_PROP}" already exists.`);
+  } catch {
+    await hs.crm.properties.coreApi.create("deals", {
+      name: DEAL_PAYMENT_PROP,
+      label: "Payment Status",
+      type: "enumeration",
+      fieldType: "select",
+      groupName: "dealinformation",
+      options: ["Paid", "Pending", "Overdue", "Not invoiced"].map((v, i) => ({
+        label: v,
+        value: v,
+        displayOrder: i,
+        hidden: false,
+      })),
+    });
+    console.log(`✓ Created HubSpot deal property "${DEAL_PAYMENT_PROP}".`);
   }
 }
 
@@ -200,10 +230,33 @@ async function seedHubSpot(p: Persona, stripeCustomerId: string | null) {
 
   for (const d of p.deals) {
     const deal = await hs.crm.deals.basicApi.create({
-      properties: { dealname: d.name, dealstage: d.stage, amount: String(d.amount), pipeline: "default" },
+      properties: {
+        dealname: d.name,
+        dealstage: d.stage,
+        amount: String(d.amount),
+        pipeline: "default",
+        [DEAL_PAYMENT_PROP]: d.payment,
+      },
       associations: [],
     });
     await associate("deals", deal.id, "companies", companyId);
+    // Products as line items on the deal.
+    for (const prod of d.products) {
+      try {
+        const li = await hs.crm.lineItems.basicApi.create({
+          properties: {
+            name: prod.name,
+            quantity: String(prod.quantity),
+            price: String(Math.round(prod.amount / prod.quantity)),
+            amount: String(prod.amount),
+          },
+          associations: [],
+        });
+        await associate("line_items", li.id, "deals", deal.id);
+      } catch (e) {
+        console.warn(`    ! line item "${prod.name}" failed: ${String(e)}`);
+      }
+    }
   }
   for (const t of p.tickets) {
     try {
@@ -254,15 +307,18 @@ async function cleanup() {
 async function main() {
   console.log("Seeding ReVue2 demo data (Stripe test mode + HubSpot)…\n");
 
-  await cleanup();
-
+  // Ensure custom properties FIRST — if this fails on a missing scope we abort
+  // before the cleanup deletes anything.
   try {
     await ensureStripeIdProperty();
+    await ensurePaymentStatusProperty();
   } catch (e) {
-    console.error(`\n✗ Couldn't create the "${STRIPE_ID_PROP}" property — likely missing the`);
-    console.error("  crm.schemas.companies.write scope on the private app.\n  Detail:", String(e));
+    console.error(`\n✗ Couldn't create a custom property — likely missing the`);
+    console.error("  crm.schemas.{companies,deals}.write scope on the private app.\n  Detail:", String(e));
     process.exit(1);
   }
+
+  await cleanup();
 
   for (const p of PERSONAS) {
     console.log(`\n• ${p.name}`);

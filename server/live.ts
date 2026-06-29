@@ -2,7 +2,7 @@
 // SDKs are imported lazily so the app still boots (in mock mode) even if the
 // packages aren't installed yet. Only reached when both env keys are present.
 
-import type { Contact, CompanyResolution, RawClientData, ResourceCandidate } from "../shared/types";
+import type { Contact, CompanyResolution, Deal, DealProduct, PaymentStatus, RawClientData, ResourceCandidate } from "../shared/types";
 import { rankCandidates, type ResourceRecord } from "./match";
 import { combineResources, type SelQbo, type SelStripe } from "./combine";
 import { fetchQbo, fetchQboById, hasQbo, searchQboCandidates } from "./qbo";
@@ -89,22 +89,97 @@ function companyFields(id: string, p: any) {
   };
 }
 
-async function associatedIds(hs: any, id: string, toObjectType: string): Promise<string[]> {
+async function assoc(hs: any, fromType: string, fromId: string, toType: string): Promise<string[]> {
   const res = await hs.crm.associations.v4.basicApi
-    .getPage("companies", id, toObjectType)
+    .getPage(fromType, fromId, toType)
     .catch(() => ({ results: [] as { toObjectId: string }[] }));
-  return (res.results ?? []).map((a: { toObjectId: string }) => a.toObjectId).slice(0, 25);
+  return (res.results ?? []).map((a: { toObjectId: string }) => a.toObjectId).slice(0, 50);
+}
+// Company-anchored association (deals/tickets/contacts hang off the company).
+async function associatedIds(hs: any, id: string, toObjectType: string): Promise<string[]> {
+  return assoc(hs, "companies", id, toObjectType);
 }
 
-async function fetchDeals(hs: any, id: string) {
+const DEAL_PAYMENT_PROP = process.env.HUBSPOT_DEAL_PAYMENT_PROPERTY || "payment_status";
+
+interface StageMeta {
+  label: string;
+  prob: number;
+  closed: boolean;
+  won: boolean;
+  pipeline: string;
+}
+let stageMapCache: Map<string, StageMeta> | null = null;
+
+// Map each deal-stage id → its human label / probability / pipeline (cached
+// per process; pipeline definitions rarely change).
+async function getStageMap(hs: any): Promise<Map<string, StageMeta>> {
+  if (stageMapCache) return stageMapCache;
+  const map = new Map<string, StageMeta>();
+  try {
+    const res = await hs.crm.pipelines.pipelinesApi.getAll("deals");
+    for (const p of res.results ?? []) {
+      for (const st of p.stages ?? []) {
+        const prob = Math.round(Number(st.metadata?.probability ?? 0) * 100);
+        const closed = String(st.metadata?.isClosed) === "true";
+        map.set(st.id, { label: st.label, prob, closed, won: closed && prob >= 100, pipeline: p.label });
+      }
+    }
+  } catch (e) {
+    console.warn(`[ReVue2] Pipeline fetch failed: ${String(e)}`);
+  }
+  stageMapCache = map;
+  return map;
+}
+
+async function fetchLineItems(hs: any, dealId: string): Promise<DealProduct[]> {
+  try {
+    const liIds = await assoc(hs, "deals", dealId, "line_items");
+    return await Promise.all(
+      liIds.map(async (liId) => {
+        const li = await hs.crm.lineItems.basicApi.getById(liId, ["name", "quantity", "amount", "price", "hs_product_name"]);
+        const lp = li.properties;
+        const qty = Number(lp.quantity) || 1;
+        return {
+          name: (lp.name as string) || (lp.hs_product_name as string) || "Item",
+          quantity: qty,
+          amount: Number(lp.amount) || (Number(lp.price) || 0) * qty,
+        };
+      }),
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function fetchDeals(hs: any, id: string): Promise<Deal[]> {
+  const stageMap = await getStageMap(hs);
+  const dealIds = await associatedIds(hs, id, "deals");
   return Promise.all(
-    (await associatedIds(hs, id, "deals")).map(async (dealId) => {
-      const d = await hs.crm.deals.basicApi.getById(dealId, ["dealname", "dealstage", "amount", "closedate"]);
+    dealIds.map(async (dealId) => {
+      const base = ["dealname", "dealstage", "amount", "closedate", "pipeline"];
+      let d;
+      try {
+        d = await hs.crm.deals.basicApi.getById(dealId, [...base, DEAL_PAYMENT_PROP]);
+      } catch {
+        d = await hs.crm.deals.basicApi.getById(dealId, base);
+      }
+      const p = d.properties;
+      const stageId = (p.dealstage as string) || "";
+      const meta = stageMap.get(stageId);
+      const products = await fetchLineItems(hs, dealId);
       return {
-        name: (d.properties.dealname as string) || "Deal",
-        stage: ((d.properties.dealstage as string) || "").toLowerCase(),
-        amount: Number(d.properties.amount) || 0,
-        closeDate: (d.properties.closedate as string) || new Date().toISOString(),
+        name: (p.dealname as string) || "Deal",
+        stage: stageId.toLowerCase(),
+        stageLabel: meta?.label ?? stageId,
+        pipeline: meta?.pipeline ?? "Pipeline",
+        probability: meta?.prob ?? 0,
+        isClosed: meta?.closed ?? stageId.toLowerCase().startsWith("closed"),
+        isWon: meta?.won ?? stageId.toLowerCase().includes("won"),
+        amount: Number(p.amount) || 0,
+        closeDate: (p.closedate as string) || new Date().toISOString(),
+        paymentStatus: ((p[DEAL_PAYMENT_PROP] as PaymentStatus) || "Not invoiced") as PaymentStatus,
+        products,
       };
     }),
   );
