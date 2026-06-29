@@ -10,7 +10,8 @@ import { assembleSummary } from "./assemble";
 import { mockClientRaw, mockList, mockResolve } from "./mock";
 import { hasLiveKeys, hasStripe, liveClientRaw, liveList, liveResolve } from "./live";
 import { authorizeUrl, exchangeCode, hasCredentials, hasQbo } from "./qbo";
-import type { ClientListItem, ClientSummary, CompanyResolution } from "../shared/types";
+import { buildOverview } from "./overview";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview } from "../shared/types";
 
 const app = express();
 app.use(cors());
@@ -92,6 +93,23 @@ app.get("/api/clients", async (_req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to load clients", detail: String(err) });
+  }
+});
+
+// Portfolio overview across all companies (NRR, billing status, alignment,
+// revenue overlay, NRR health distribution).
+app.get("/api/overview", async (_req, res) => {
+  try {
+    const overview = await cached<Overview>("overview", async () => {
+      if (!LIVE) return buildOverview(mockList().map((id) => mockClientRaw(id)), true);
+      const companies = await liveList();
+      const raws = await Promise.all(companies.map((c) => liveClientRaw(c.id)));
+      return buildOverview(raws, false);
+    });
+    res.json(overview);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load overview", detail: String(err) });
   }
 });
 

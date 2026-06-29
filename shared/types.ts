@@ -120,6 +120,29 @@ export interface ResourceContribution {
   outstanding: number;
 }
 
+// Portfolio overview across all companies.
+export interface OverviewRow {
+  id: string;
+  name: string;
+  nrr: number | null;
+  billingSource: DataSource | "none";
+  band: HealthBand;
+  mrr: number;
+  outstanding: number;
+  lifetimeSpend: number;
+  conflicts: number; // Stripe<->QBO disagreements
+  aligned: boolean; // false when conflicts > 0
+}
+
+export interface Overview {
+  companies: OverviewRow[];
+  // Portfolio revenue by calendar month: this year overlaid on last year.
+  revenue: { months: string[]; currentYear: number[]; lastYear: number[] };
+  // Distribution of NRR across the portfolio.
+  nrrHealth: { expanding: number; flat: number; contracting: number; noData: number; average: number | null };
+  mock: boolean;
+}
+
 export interface HealthFactor {
   key: "payment" | "engagement" | "renewal" | "momentum";
   label: string;

@@ -86,6 +86,14 @@ select:focus, button:focus { outline: 2px solid var(--accent); }
 
 .toggle { display: flex; align-items: center; gap: 8px; color: var(--muted); }
 
+.tabs { display: inline-flex; gap: 4px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+.tabs button { background: none; border: none; color: var(--muted);
+  padding: 6px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.tabs button.active { background: var(--accent); color: #fff; }
+.row-link { cursor: pointer; }
+.row-link:hover td { background: var(--panel-2); }
+
 .badge {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;

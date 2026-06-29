@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { fetchClient, fetchClients, fetchResolve } from "./api";
-import type { ClientListItem, ClientSummary, CompanyResolution } from "../shared/types";
+import { fetchClient, fetchClients, fetchOverview, fetchResolve } from "./api";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview } from "../shared/types";
 import Dashboard from "./components/Dashboard";
 import Sidebar from "./components/Sidebar";
 import CompanySelect from "./components/CompanySelect";
+import OverviewPage from "./components/OverviewPage";
 import DetailsModal, { type ContribField } from "./components/DetailsModal";
 
 export default function App() {
   const [clients, setClients] = useState<ClientListItem[]>([]);
+  const [view, setView] = useState<"dashboard" | "overview">("dashboard");
+  const [overview, setOverview] = useState<Overview | null>(null);
   const [companyId, setCompanyId] = useState<string>("");
   const [resolution, setResolution] = useState<CompanyResolution | null>(null);
   const [stripeSel, setStripeSel] = useState<string[]>([]);
@@ -54,19 +57,42 @@ export default function App() {
       .finally(() => setLoading(false));
   }, [resolution, stripeSel, qboSel, companyId]);
 
+  // Load the overview the first time the tab is opened.
+  useEffect(() => {
+    if (view !== "overview" || overview) return;
+    fetchOverview()
+      .then(setOverview)
+      .catch((e) => setError(String(e)));
+  }, [view, overview]);
+
   const toggle = (setter: typeof setStripeSel) => (id: string) =>
     setter((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const openCompany = (id: string) => {
+    setCompanyId(id);
+    setView("dashboard");
+  };
 
   return (
     <div className="app-shell">
       <header className="top">
-        <button className="icon-btn" onClick={() => setSidebarOpen((v) => !v)} title="Toggle sidebar">
-          ☰
-        </button>
+        {view === "dashboard" && (
+          <button className="icon-btn" onClick={() => setSidebarOpen((v) => !v)} title="Toggle sidebar">
+            ☰
+          </button>
+        )}
         <h1>
           ReVue<span style={{ color: "var(--accent)" }}>2</span>
         </h1>
-        <CompanySelect companies={clients} value={companyId} onChange={setCompanyId} />
+        <div className="tabs">
+          <button className={view === "dashboard" ? "active" : ""} onClick={() => setView("dashboard")}>
+            Dashboard
+          </button>
+          <button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}>
+            Overview
+          </button>
+        </div>
+        {view === "dashboard" && <CompanySelect companies={clients} value={companyId} onChange={setCompanyId} />}
         <div className="spacer" />
         <label className="toggle">
           <input type="checkbox" checked={admin} onChange={(e) => setAdmin(e.target.checked)} />
@@ -74,8 +100,19 @@ export default function App() {
         </label>
       </header>
 
-      <div className="layout">
-        {sidebarOpen && resolution && (
+      {error && (
+        <div className="card" style={{ borderColor: "var(--risk)" }}>
+          Error: {error}
+        </div>
+      )}
+
+      {view === "overview" ? (
+        <main className="main">
+          {overview ? <OverviewPage data={overview} onOpen={openCompany} /> : <div className="spinner">Loading overview…</div>}
+        </main>
+      ) : (
+        <div className="layout">
+          {sidebarOpen && resolution && (
           <Sidebar
             resolution={resolution}
             stripeSel={stripeSel}
@@ -89,21 +126,19 @@ export default function App() {
           />
         )}
 
-        <main className="main">
-          {data?.mock && (
-            <div className="mock-banner">
-              Running in <strong>mock mode</strong> — sample data. Add HubSpot &amp; Stripe keys in <code>.env</code> to go live.
-            </div>
-          )}
-          {error && (
-            <div className="card" style={{ borderColor: "var(--risk)" }}>
-              Error: {error}
-            </div>
-          )}
-          {loading && <div className="spinner">Loading…</div>}
-          {!loading && data && <Dashboard data={data} admin={admin} onDetails={(field, label) => setDetails({ field, label })} />}
-        </main>
-      </div>
+          <main className="main">
+            {data?.mock && (
+              <div className="mock-banner">
+                Running in <strong>mock mode</strong> — sample data. Add HubSpot &amp; Stripe keys in <code>.env</code> to go live.
+              </div>
+            )}
+            {loading && <div className="spinner">Loading…</div>}
+            {!loading && data && (
+              <Dashboard data={data} admin={admin} onDetails={(field, label) => setDetails({ field, label })} />
+            )}
+          </main>
+        </div>
+      )}
 
       {details && data && (
         <DetailsModal
