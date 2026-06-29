@@ -19,7 +19,6 @@ export default function App() {
   const [stripeSel, setStripeSel] = useState<string[]>([]);
   const [qboSel, setQboSel] = useState<string[]>([]);
   const [data, setData] = useState<ClientSummary | null>(null);
-  const [admin, setAdmin] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [details, setDetails] = useState<{ field: ContribField; label: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -42,32 +41,51 @@ export default function App() {
   }, []);
 
   // 2. Company chosen → resolve candidates, seed selections with the best default.
+  // The `cancelled` flag drops a stale resolution if the user switches company
+  // before this request lands, so a slow response can't overwrite a newer one.
   useEffect(() => {
     if (!companyId) return;
+    let cancelled = false;
     setResolution(null);
     setData(null);
     setError(null);
     setLoadPhase("resolving");
     fetchResolve(companyId)
       .then((r) => {
+        if (cancelled) return;
         setResolution(r);
         setStripeSel(r.defaults.stripeId ? [r.defaults.stripeId] : []);
         setQboSel(r.defaults.quickbooksId ? [r.defaults.quickbooksId] : []);
       })
       .catch((e) => {
+        if (cancelled) return;
         setError(String(e));
         setLoadPhase("idle");
       });
+    return () => {
+      cancelled = true;
+    };
   }, [companyId]);
 
-  // 3. Selection changed → recompute from all selected resources.
+  // 3. Selection changed → recompute from all selected resources. Same stale-guard:
+  // switching company or selection mid-flight must not let an older response win.
   useEffect(() => {
     if (!resolution || resolution.company.id !== companyId) return;
+    let cancelled = false;
     setLoadPhase("billing");
     fetchClient(companyId, stripeSel, qboSel)
-      .then(setData)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoadPhase("idle"));
+      .then((d) => {
+        if (!cancelled) setData(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadPhase("idle");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [resolution, stripeSel, qboSel, companyId]);
 
   // Overview: load progressively so we can report which company is being collected.
@@ -156,10 +174,6 @@ export default function App() {
         </div>
         {view === "dashboard" && <CompanySelect companies={clients} value={companyId} onChange={setCompanyId} />}
         <div className="spacer" />
-        <label className="toggle">
-          <input type="checkbox" checked={admin} onChange={(e) => setAdmin(e.target.checked)} />
-          Admin view
-        </label>
       </header>
 
       {error && (
@@ -218,7 +232,7 @@ export default function App() {
                 />
               )
             ) : (
-              data && <Dashboard data={data} admin={admin} onDetails={(field, label) => setDetails({ field, label })} />
+              data && <Dashboard data={data} onDetails={(field, label) => setDetails({ field, label })} />
             )}
           </main>
         </div>

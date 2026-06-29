@@ -1,6 +1,6 @@
 import type { ClientSummary, Conflict, HealthBand } from "../../shared/types";
 import { ArAgingBars, HealthFactors, InvoiceChart, RevenueChart } from "./Charts";
-import { DealsTable, InvoicesTable, PipelineCard, TicketsTable } from "./Tables";
+import { DealsTable, InvoicesTable, PipelineCard, RenewalsCard, TicketsTable } from "./Tables";
 import type { ContribField } from "./DetailsModal";
 
 const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
@@ -61,11 +61,9 @@ function ConflictsCard({ conflicts }: { conflicts: Conflict[] }) {
 
 export default function Dashboard({
   data,
-  admin,
   onDetails,
 }: {
   data: ClientSummary;
-  admin: boolean;
   onDetails?: (f: ContribField, label: string) => void;
 }) {
   const { company, link, kpis, health, charts, reconciliation, billing, nrr } = data;
@@ -84,11 +82,9 @@ export default function Dashboard({
             {billing.conflicts.length > 0 && (
               <span className="badge risk">⚠ {billing.conflicts.length} conflict{billing.conflicts.length > 1 ? "s" : ""}</span>
             )}
-            {admin && (
-              <span className={`badge ${link.status === "linked" ? "muted" : "risk"}`}>
-                {link.status === "linked" ? `Stripe: ${link.stripeCustomerId}` : `Stripe: ${link.status}`}
-              </span>
-            )}
+            <span className={`badge ${link.status === "linked" ? "muted" : "risk"}`}>
+              {link.status === "linked" ? `Stripe: ${link.stripeCustomerId}` : `Stripe: ${link.status}`}
+            </span>
           </div>
         </div>
       </div>
@@ -104,10 +100,12 @@ export default function Dashboard({
           value={nrr.value != null ? `${nrr.value}%` : "—"}
           sub={
             nrr.value != null
-              ? `${usd(nrr.currentMrr)} now vs ${usd(nrr.baselineMrr)} ${nrr.windowMonths}mo ago`
-              : "no year-ago baseline"
+              ? `${usd(nrr.current)} now vs ${usd(nrr.baseline)} a year ago`
+              : nrr.unratifiedWonValue > 0
+                ? `${usd(nrr.unratifiedWonValue)} won not ratified`
+                : "no ratified baseline"
           }
-          title="Net Revenue Retention = current MRR ÷ MRR at start of trailing window × 100"
+          title="Net Revenue Retention from ratified closed-won deals = recent renewal/expansion value ÷ value booked ~a year earlier × 100. Only deals backed by Stripe/QuickBooks billing count."
         />
         <Kpi label="Next renewal" value={fmtDate(kpis.nextRenewal)} />
       </div>
@@ -157,25 +155,27 @@ export default function Dashboard({
         </div>
       )}
 
-      {/* Reconciliation — admin only */}
-      {admin && (
-        <div className={`card recon ${reconciliation.flagged ? "flagged" : ""}`}>
-          <h2>CRM ↔ Stripe reconciliation {reconciliation.flagged && <span className="badge risk">mismatch</span>}</h2>
-          <div style={{ display: "flex", gap: 32 }}>
-            <div><div className="label muted">CRM closed-won</div><div className="value">{usd(reconciliation.closedWonValue)}</div></div>
-            <div><div className="label muted">Stripe ARR</div><div className="value">{usd(reconciliation.stripeArr)}</div></div>
-            <div><div className="label muted">Difference</div><div className="value">{usd(reconciliation.mismatch)}</div></div>
-          </div>
-          <div className="muted" style={{ marginTop: 10 }}>{reconciliation.note}</div>
+      {/* Reconciliation */}
+      <div className={`card recon ${reconciliation.flagged ? "flagged" : ""}`}>
+        <h2>CRM ↔ Stripe reconciliation {reconciliation.flagged && <span className="badge risk">mismatch</span>}</h2>
+        <div style={{ display: "flex", gap: 32 }}>
+          <div><div className="label muted">CRM closed-won</div><div className="value">{usd(reconciliation.closedWonValue)}</div></div>
+          <div><div className="label muted">Stripe ARR</div><div className="value">{usd(reconciliation.stripeArr)}</div></div>
+          <div><div className="label muted">Difference</div><div className="value">{usd(reconciliation.mismatch)}</div></div>
         </div>
-      )}
+        <div className="muted" style={{ marginTop: 10 }}>{reconciliation.note}</div>
+      </div>
 
       {/* Detail tables */}
       <div className="grid cols-2">
         <div className="card"><h2>Invoices</h2><InvoicesTable invoices={data.invoices} /></div>
         <div className="card"><h2>Pipeline activity</h2><PipelineCard deals={data.deals} /></div>
       </div>
-      <div className="card"><h2>Deals &amp; products</h2><DealsTable deals={data.deals} /></div>
+      <div className="card">
+        <h2>Deals &amp; products</h2>
+        <DealsTable deals={data.deals} />
+        <RenewalsCard subscriptions={data.subscriptions} />
+      </div>
       <div className="card"><h2>Support tickets</h2><TicketsTable tickets={data.tickets} /></div>
     </div>
   );

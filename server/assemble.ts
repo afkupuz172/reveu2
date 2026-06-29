@@ -7,6 +7,7 @@ import type {
   ClientSummary,
   Conflict,
   DataSource,
+  Deal,
   HealthBand,
   HealthFactor,
   MergedInvoice,
@@ -35,29 +36,76 @@ function daysUntil(iso: string): number {
 const money = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
 const digits = (s: string) => s.replace(/\D/g, "");
 
-// Net Revenue Retention (trailing ~12 months) from this client's recurring
-// revenue: current MRR vs. the oldest monthly recurring revenue in the window.
-// Stripe-based (QuickBooks has no subscriptions). null without a baseline.
-function computeNrr(
-  charges: { amount: number; date: string }[],
-  mrrNow: number,
-): ClientSummary["nrr"] {
-  const byMonth = new Map<string, number>();
-  for (const c of charges) byMonth.set(monthKey(c.date), (byMonth.get(monthKey(c.date)) ?? 0) + c.amount);
-  const keys = lastNMonths(13).map((m) => m.key); // oldest → newest
-  const present = keys.filter((k) => (byMonth.get(k) ?? 0) > 0);
-  if (present.length < 2) return { value: null, currentMrr: mrrNow, baselineMrr: 0, windowMonths: 0 };
-  const baselineKey = present[0];
-  const currentKey = present[present.length - 1];
-  const baselineMrr = byMonth.get(baselineKey) ?? 0;
-  const currentMrr = mrrNow > 0 ? mrrNow : byMonth.get(currentKey) ?? 0;
-  const windowMonths = keys.indexOf(currentKey) - keys.indexOf(baselineKey);
-  return {
-    value: baselineMrr > 0 ? Math.round((currentMrr / baselineMrr) * 100) : null,
-    currentMrr,
-    baselineMrr,
-    windowMonths,
+// --- Deal ratification: tie CRM "won" deals to money actually collected ---
+const RATIFY_FRACTION = 0.4; // collected ÷ deal value needed to count as ratified
+const NRR_RECENT_MONTHS = 9; // "current" cohort: won within this many months
+const NRR_WINDOW_MONTHS = 24; // "baseline" cohort: won between RECENT and this
+const DAY = 86_400_000;
+const monthsAgo = (iso: string) => (Date.now() - new Date(iso).getTime()) / (30.4 * DAY);
+
+// Money actually collected (Stripe charges + QBO payments) in a window around a
+// deal's close date — the evidence that a CRM "won" deal turned into real revenue.
+function collectedAround(raw: RawClientData, closeIso: string): { stripe: number; qbo: number } {
+  const close = new Date(closeIso).getTime();
+  const start = close - 60 * DAY;
+  const end = close + 400 * DAY;
+  const inWin = (iso: string) => {
+    const t = new Date(iso).getTime();
+    return t >= start && t <= end;
   };
+  const stripe = (raw.stripe?.charges ?? []).filter((c) => inWin(c.date)).reduce((s, c) => s + c.amount, 0);
+  const qbo = (raw.qbo?.payments ?? []).filter((p) => inWin(p.date)).reduce((s, p) => s + p.amount, 0);
+  return { stripe, qbo };
+}
+
+// Best-matching billing invoice number for a deal (amount within 2% and close date
+// within ±90 days), so the deals table can show it. null when nothing maps cleanly.
+function matchInvoiceNumber(deal: Deal, invoices: MergedInvoice[]): string | null {
+  const close = new Date(deal.closeDate).getTime();
+  const hit = invoices.find(
+    (i) =>
+      Math.abs(new Date(i.date).getTime() - close) <= 90 * DAY &&
+      Math.abs(i.amount - deal.amount) <= deal.amount * 0.02,
+  );
+  return hit?.number ?? null;
+}
+
+// Attach invoiceNumber + (for won deals) ratification backed by Stripe/QBO billing.
+function enrichDeals(raw: RawClientData, invoices: MergedInvoice[]): Deal[] {
+  return raw.deals.map((d) => {
+    const invoiceNumber = d.invoiceNumber ?? matchInvoiceNumber(d, invoices);
+    if (!d.isWon) return { ...d, invoiceNumber };
+    const { stripe, qbo } = collectedAround(raw, d.closeDate);
+    const backing: DataSource[] = [];
+    if (stripe > 0) backing.push("stripe");
+    if (qbo > 0) backing.push("quickbooks");
+    const ratified = stripe + qbo >= d.amount * RATIFY_FRACTION;
+    return { ...d, invoiceNumber, ratified, backing };
+  });
+}
+
+// Net Revenue Retention from closed-won HubSpot deals — counting only revenue that
+// billing ratified. Compares the recent renewal/expansion cohort (won ≤ RECENT
+// months ago) against the cohort booked ~a year earlier (RECENT–WINDOW months ago).
+// null unless BOTH cohorts have ratified value, so a customer mid-contract (an old
+// win, no recent renewal deal yet) isn't mislabeled as 0% churn.
+function computeNrr(deals: Deal[]): ClientSummary["nrr"] {
+  const won = deals.filter((d) => d.isWon);
+  const ratifiedWon = won.filter((d) => d.ratified);
+  const unratifiedWonValue = won.filter((d) => !d.ratified).reduce((s, d) => s + d.amount, 0);
+
+  const current = ratifiedWon
+    .filter((d) => monthsAgo(d.closeDate) <= NRR_RECENT_MONTHS)
+    .reduce((s, d) => s + d.amount, 0);
+  const baseline = ratifiedWon
+    .filter((d) => {
+      const m = monthsAgo(d.closeDate);
+      return m > NRR_RECENT_MONTHS && m <= NRR_WINDOW_MONTHS;
+    })
+    .reduce((s, d) => s + d.amount, 0);
+
+  const value = baseline > 0 && current > 0 ? Math.round((current / baseline) * 100) : null;
+  return { value, current, baseline, windowMonths: value != null ? 12 : 0, unratifiedWonValue };
 }
 
 // Same invoice number in both Stripe and QBO but a different status = a conflict.
@@ -190,14 +238,25 @@ export function assembleSummary(raw: RawClientData): ClientSummary {
     (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
   );
 
-  // Sum-all totals: Stripe + QuickBooks both count.
-  const stripeSpend =
+  // Sum-all totals. Each selected resource contributes independently (charges, or
+  // paid invoices as a per-resource fallback), so the aggregate is the SUM of those
+  // per-resource contributions — never "all charges || all paid invoices" across
+  // resources, which would drop an invoice-only resource whenever another has
+  // charges and make the KPI disagree with the details breakdown. We derive from
+  // raw.contributions when present (live/mock always supply them) and fall back to a
+  // raw recompute for direct assembleSummary calls (e.g. tests).
+  const contributions = raw.contributions ?? [];
+  const stripeSpendRaw =
     (stripe?.charges ?? []).reduce((s, c) => s + c.amount, 0) ||
     stripeInvoices.filter((i) => i.status === "paid").reduce((s, i) => s + i.amount, 0);
-  const lifetimeSpend = stripeSpend + (qbo?.totalIncome ?? 0);
+  const lifetimeSpend = contributions.length
+    ? contributions.reduce((s, c) => s + c.lifetimeSpend, 0)
+    : stripeSpendRaw + (qbo?.totalIncome ?? 0);
   const mrr = subs.filter((s) => s.status === "active").reduce((s, x) => s + x.mrr, 0);
   const stripeOutstanding = stripeInvoices.filter((i) => i.status !== "paid").reduce((s, i) => s + i.amount, 0);
-  const outstandingBalance = stripeOutstanding + (qbo?.balance ?? 0);
+  const outstandingBalance = contributions.length
+    ? contributions.reduce((s, c) => s + c.outstanding, 0)
+    : stripeOutstanding + (qbo?.balance ?? 0);
   const nextRenewal =
     subs
       .filter((s) => s.status === "active" || s.status === "past_due")
@@ -221,7 +280,10 @@ export function assembleSummary(raw: RawClientData): ClientSummary {
   });
 
   const kpis = { lifetimeSpend, mrr, arr: mrr * 12, outstandingBalance, nextRenewal };
-  const nrr = computeNrr(stripe?.charges ?? [], mrr);
+  // Enrich deals with invoice numbers + billing ratification, then derive NRR from
+  // the ratified closed-won deals (HubSpot pipeline backed by Stripe/QuickBooks).
+  const deals = enrichDeals(raw, invoices);
+  const nrr = computeNrr(deals);
 
   const source: DataSource | "none" = stripe ? "stripe" : qbo ? "quickbooks" : "none";
   const billing: ClientSummary["billing"] = {
@@ -234,9 +296,7 @@ export function assembleSummary(raw: RawClientData): ClientSummary {
   };
 
   // Reconciliation: closed-won CRM value vs. annualized Stripe reality.
-  const closedWonValue = raw.deals
-    .filter((d) => d.stage.startsWith("closed") && d.stage.includes("won"))
-    .reduce((s, d) => s + d.amount, 0);
+  const closedWonValue = deals.filter((d) => d.isWon).reduce((s, d) => s + d.amount, 0);
   const stripeArr = mrr * 12;
   const mismatch = closedWonValue - stripeArr;
   const flagged = closedWonValue > 0 && Math.abs(mismatch) > Math.max(1000, closedWonValue * 0.1);
@@ -245,8 +305,6 @@ export function assembleSummary(raw: RawClientData): ClientSummary {
     : flagged
       ? `CRM closed-won (${money(closedWonValue)}) differs from annualized Stripe revenue (${money(stripeArr)}) by ${money(Math.abs(mismatch))}.`
       : "CRM and Stripe revenue are consistent.";
-
-  const contributions = raw.contributions ?? [];
 
   return {
     company: raw.company,
@@ -257,7 +315,7 @@ export function assembleSummary(raw: RawClientData): ClientSummary {
     nrr,
     charts: { revenueOverTime, invoices: invoiceChart },
     subscriptions: subs,
-    deals: raw.deals,
+    deals,
     tickets: raw.tickets,
     invoices,
     reconciliation: { closedWonValue, stripeArr, mismatch, flagged, note },

@@ -149,7 +149,13 @@ export async function qboCreate<T = unknown>(entity: string, body: unknown): Pro
   return res.json() as Promise<T>;
 }
 
-const esc = (s: string) => s.replace(/'/g, "\\'");
+// Escape a value for a QBO SQL string literal: backslash FIRST (so we don't
+// double-escape the escapes we add), then the single quote. Escaping only the
+// quote left a trailing "\" able to break out of the literal.
+const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+// For LIKE patterns, additionally neutralize the % and _ wildcards so a literal
+// search token can't be reinterpreted as a pattern.
+const escLike = (s: string) => esc(s).replace(/[%_]/g, "");
 const iso = (d?: string) => (d ? new Date(d).toISOString() : new Date().toISOString());
 const firstToken = (s: string) => s.trim().split(/\s+/)[0] ?? s;
 
@@ -248,7 +254,7 @@ export async function searchQboCandidates(
     });
   try {
     const byName = await query<{ QueryResponse: { Customer?: any[] } }>(
-      `SELECT * FROM Customer WHERE DisplayName LIKE '%${esc(firstToken(companyName))}%' MAXRESULTS 25`,
+      `SELECT * FROM Customer WHERE DisplayName LIKE '%${escLike(firstToken(companyName))}%' MAXRESULTS 25`,
     );
     (byName.QueryResponse.Customer ?? []).forEach(add);
   } catch {

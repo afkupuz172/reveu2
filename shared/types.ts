@@ -26,6 +26,14 @@ export interface Deal {
   closeDate: string;
   paymentStatus: PaymentStatus;
   products: DealProduct[];
+  // Billing invoice number that corresponds to this deal (carried from the CRM, or
+  // matched to an invoice by amount + close date in assemble). null when none maps.
+  invoiceNumber?: string | null;
+  // Ratification: whether a closed-won deal's value is corroborated by money
+  // actually collected in Stripe/QuickBooks. Set by assemble; undefined for
+  // non-won deals (ratification only applies to won revenue).
+  ratified?: boolean;
+  backing?: DataSource[]; // which billing systems corroborated the won revenue
 }
 
 // A/R aging buckets (QuickBooks-derived; Stripe has no equivalent).
@@ -212,10 +220,17 @@ export interface ClientSummary {
     outstandingBalance: number;
     nextRenewal: string | null;
   };
-  // Net Revenue Retention: current recurring revenue vs. the baseline a year ago.
-  // value is a percentage (100 = flat, >100 expansion, <100 contraction/churn);
-  // null when there's no year-old baseline to compare against.
-  nrr: { value: number | null; currentMrr: number; baselineMrr: number; windowMonths: number };
+  // Net Revenue Retention from closed-won HubSpot deals, counting only revenue
+  // ratified by Stripe/QuickBooks billing: recent renewal/expansion value vs the
+  // value booked ~a year earlier. value is a percentage (100 = flat, >100 expansion,
+  // <100 contraction/churn); null when there's no ratified baseline + recent pair.
+  nrr: {
+    value: number | null;
+    current: number; // recent ratified won value (trailing window)
+    baseline: number; // ratified won value booked ~a year earlier
+    windowMonths: number;
+    unratifiedWonValue: number; // won-deal value NOT backed by billing
+  };
   charts: {
     revenueOverTime: MonthPoint[];
     invoices: MonthPoint[]; // paid vs outstanding per month

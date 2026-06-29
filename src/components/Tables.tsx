@@ -18,18 +18,35 @@ function ProductCells({ products }: { products: ClientSummary["deals"][number]["
   );
 }
 
+// Won deals must be backed by Stripe/QuickBooks billing to be "ratified"; an
+// unratified won deal means the CRM booked revenue billing can't confirm.
+const backingLabel = (sources: ClientSummary["deals"][number]["backing"]) =>
+  !sources?.length
+    ? ""
+    : sources.map((s) => (s === "stripe" ? "Stripe" : "QuickBooks")).join(" + ");
+
 export function DealsTable({ deals }: { deals: ClientSummary["deals"] }) {
   if (!deals.length) return <div className="empty">No deals.</div>;
   return (
     <div className="scroll-box">
       <table>
         <thead>
-          <tr><th>Deal</th><th>Stage</th><th>Amount</th><th>Payment</th><th>Products</th><th>Close</th></tr>
+          <tr><th>Deal</th><th>Stage</th><th>Amount</th><th>Invoice</th><th>Payment</th><th>Products</th><th>Close</th></tr>
         </thead>
         <tbody>
           {deals.map((d, i) => (
-            <tr key={i}>
-              <td>{d.name}</td>
+            <tr key={d.name + i}>
+              <td>
+                <div>{d.name}</div>
+                {d.isWon && d.ratified === false && (
+                  <div className="muted" style={{ fontSize: 11 }}>
+                    <span className="badge risk">⚠ Not ratified</span>
+                  </div>
+                )}
+                {d.isWon && d.ratified && d.backing?.length ? (
+                  <div className="muted" style={{ fontSize: 11 }}>✓ Ratified · {backingLabel(d.backing)}</div>
+                ) : null}
+              </td>
               <td>
                 <div>{d.stageLabel}</div>
                 <div className="muted" style={{ fontSize: 11 }}>
@@ -37,9 +54,62 @@ export function DealsTable({ deals }: { deals: ClientSummary["deals"] }) {
                 </div>
               </td>
               <td>{usd(d.amount)}</td>
+              <td className="muted">{d.invoiceNumber ?? "—"}</td>
               <td><span className={`badge ${payClass(d.paymentStatus)}`}>{d.paymentStatus}</span></td>
               <td><ProductCells products={d.products} /></td>
               <td className="muted">{date(d.closeDate)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Pending renewals & cancellations, derived from Stripe subscriptions: upcoming
+// renewals (auto-renewing, by period end) and cancellations (canceled, or set to
+// not auto-renew so they lapse at period end).
+export function RenewalsCard({ subscriptions }: { subscriptions: ClientSummary["subscriptions"] }) {
+  if (!subscriptions.length)
+    return (
+      <div style={{ marginTop: 16 }}>
+        <h3 style={{ margin: "0 0 8px", fontSize: 13 }}>Renewals &amp; cancellations</h3>
+        <div className="empty">No subscriptions — nothing scheduled to renew.</div>
+      </div>
+    );
+
+  const daysUntil = (iso: string) => Math.round((new Date(iso).getTime() - Date.now()) / 86_400_000);
+  const rows = subscriptions.map((s) => {
+    const days = daysUntil(s.currentPeriodEnd);
+    if (s.status === "canceled")
+      return { plan: s.plan, mrr: s.mrr, when: s.currentPeriodEnd, label: "Canceled", cls: "risk" as const };
+    if (!s.autoRenew)
+      return { plan: s.plan, mrr: s.mrr, when: s.currentPeriodEnd, label: "Cancels (no auto-renew)", cls: "warn" as const };
+    const pending = days <= 30;
+    const pastDue = s.status === "past_due";
+    return {
+      plan: s.plan,
+      mrr: s.mrr,
+      when: s.currentPeriodEnd,
+      label: pastDue ? "Pending renewal · past due" : pending ? "Pending renewal" : "Renews",
+      cls: (pastDue ? "risk" : pending ? "warn" : "good") as "risk" | "warn" | "good",
+    };
+  });
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <h3 style={{ margin: "0 0 8px", fontSize: 13 }}>Renewals &amp; cancellations</h3>
+      <table>
+        <thead>
+          <tr><th>Plan</th><th>MRR</th><th>Status</th><th>Date</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={r.plan + i}>
+              <td>{r.plan}</td>
+              <td>{usd(r.mrr)}</td>
+              <td><span className={`badge ${r.cls}`}>{r.label}</span></td>
+              <td className="muted">{date(r.when)}</td>
             </tr>
           ))}
         </tbody>

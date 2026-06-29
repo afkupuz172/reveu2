@@ -41,6 +41,16 @@ function toListItem(summary: ClientSummary): ClientListItem {
   };
 }
 
+// Log the real error server-side, return only a generic message — internal error
+// text (URLs, tokens-in-messages) must not reach the browser. These routes depend
+// on upstream APIs (HubSpot/Stripe/QBO), so a failure is almost always an upstream
+// or transient error: use 502 (retryable) rather than 404, which the progressive
+// loader would misread as "this company doesn't exist."
+function fail(res: express.Response, status: number, message: string, err: unknown) {
+  console.error(`[ReVue2] ${message}:`, err);
+  res.status(status).json({ error: message });
+}
+
 app.get("/api/health", (_req, res) =>
   res.json({ ok: true, mode: LIVE ? "live" : "mock", quickbooks: hasQbo() ? "connected" : hasCredentials() ? "unauthorized" : "off" }),
 );
@@ -69,8 +79,8 @@ app.get("/api/qbo/callback", async (req, res) => {
         " authorized. You can close this tab and reload the dashboard.</p></body></html>",
     );
   } catch (e) {
-    console.error(e);
-    res.status(500).send(`QuickBooks connect failed: ${String(e)}`);
+    console.error("[ReVue2] QuickBooks connect failed:", e);
+    res.status(500).send("QuickBooks connect failed. Check the server log and try connecting again.");
   }
 });
 
@@ -91,8 +101,7 @@ app.get("/api/clients", async (_req, res) => {
     });
     res.json(list);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to load clients", detail: String(err) });
+    fail(res, 502, "Failed to load clients", err);
   }
 });
 
@@ -108,8 +117,7 @@ app.get("/api/overview", async (_req, res) => {
     });
     res.json(overview);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to load overview", detail: String(err) });
+    fail(res, 502, "Failed to load overview", err);
   }
 });
 
@@ -125,8 +133,7 @@ app.get("/api/overview/row/:id", async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    console.error(err);
-    res.status(404).json({ error: "Overview row not found", detail: String(err) });
+    fail(res, 502, "Failed to load overview row", err);
   }
 });
 
@@ -139,8 +146,7 @@ app.get("/api/company/:id/resolve", async (req, res) => {
     );
     res.json(resolution);
   } catch (err) {
-    console.error(err);
-    res.status(404).json({ error: "Company not found", detail: String(err) });
+    fail(res, 502, "Failed to resolve company", err);
   }
 });
 
@@ -165,8 +171,7 @@ app.get("/api/client/:id", async (req, res) => {
     });
     res.json(summary);
   } catch (err) {
-    console.error(err);
-    res.status(404).json({ error: "Client not found", detail: String(err) });
+    fail(res, 502, "Failed to load client", err);
   }
 });
 

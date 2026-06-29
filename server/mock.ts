@@ -25,6 +25,7 @@ function mkDeal(
   closeDate: string,
   paymentStatus: PaymentStatus,
   products: DealProduct[],
+  invoiceNumber: string | null = null,
 ): Deal {
   const m = STAGE_META[stage] ?? { label: stage, prob: 50, closed: false, won: false };
   return {
@@ -39,6 +40,7 @@ function mkDeal(
     closeDate,
     paymentStatus,
     products,
+    invoiceNumber,
   };
 }
 
@@ -95,9 +97,25 @@ const COMPANIES: Record<string, MockCompany> = {
     references: { stripeCustomerId: "cus_acme", quickbooksCustomerId: null },
     lastActivityDays: 6,
     deals: [
-      mkDeal("Pro renewal 2026", "closedwon", 14400, isoMonthsAgo(11), "Paid", [
-        { name: "Pro Plan (annual)", quantity: 1, amount: 14400 },
-      ]),
+      // Expansion: $12k a year ago → $14.4k renewal, both ratified by billing → NRR 120%.
+      mkDeal(
+        "Pro subscription 2025",
+        "closedwon",
+        12000,
+        isoMonthsAgo(14),
+        "Paid",
+        [{ name: "Pro Plan (annual)", quantity: 1, amount: 12000 }],
+        "INV-1066",
+      ),
+      mkDeal(
+        "Pro renewal 2026",
+        "closedwon",
+        14400,
+        isoMonthsAgo(2),
+        "Paid",
+        [{ name: "Pro Plan (annual)", quantity: 1, amount: 14400 }],
+        "INV-1071",
+      ),
       mkDeal("Add-on seats", "presentationscheduled", 3600, isoDaysFromNow(20), "Not invoiced", [
         { name: "Additional seats", quantity: 6, amount: 3600 },
       ]),
@@ -110,9 +128,25 @@ const COMPANIES: Record<string, MockCompany> = {
     references: { stripeCustomerId: null, quickbooksCustomerId: null },
     lastActivityDays: 9,
     deals: [
-      mkDeal("Growth plan", "closedwon", 12000, isoMonthsAgo(8), "Overdue", [
-        { name: "Growth Plan (annual)", quantity: 1, amount: 12000 },
-      ]),
+      // Contraction: $12k a year ago → $9k renewal, both ratified → NRR 75%.
+      mkDeal(
+        "Growth plan 2025",
+        "closedwon",
+        12000,
+        isoMonthsAgo(13),
+        "Paid",
+        [{ name: "Growth Plan (annual)", quantity: 1, amount: 12000 }],
+        "INV-2041",
+      ),
+      mkDeal(
+        "Growth renewal",
+        "closedwon",
+        9000,
+        isoMonthsAgo(1),
+        "Overdue",
+        [{ name: "Growth Plan (annual)", quantity: 1, amount: 9000 }],
+        "INV-2052",
+      ),
       mkDeal("Enterprise upgrade", "decisionmakerboughtin", 24000, isoDaysFromNow(40), "Pending", [
         { name: "Enterprise license", quantity: 1, amount: 18000 },
         { name: "Onboarding services", quantity: 1, amount: 6000 },
@@ -129,6 +163,11 @@ const COMPANIES: Record<string, MockCompany> = {
     references: { stripeCustomerId: null, quickbooksCustomerId: null },
     lastActivityDays: 14,
     deals: [
+      // Won in the CRM, but QuickBooks only collected $5.6k of the $18k → NOT ratified
+      // (no Stripe, insufficient QBO payments), so it's excluded from NRR and flagged.
+      mkDeal("Logistics annual", "closedwon", 18000, isoMonthsAgo(1), "Pending", [
+        { name: "Logistics Pro (annual)", quantity: 1, amount: 18000 },
+      ]),
       mkDeal("New business", "qualifiedtobuy", 18000, isoDaysFromNow(55), "Not invoiced", [
         { name: "Logistics Pro (annual)", quantity: 1, amount: 18000 },
       ]),

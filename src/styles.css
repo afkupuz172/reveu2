@@ -27,8 +27,8 @@ body {
   padding: 6px 11px; cursor: pointer; color: var(--text); font-size: 15px; }
 
 /* Sidebar (resolve sources) */
-.sidebar { width: 300px; flex-shrink: 0; position: sticky; top: 16px;
-  max-height: calc(100vh - 96px); overflow-y: auto;
+.sidebar { width: 300px; flex-shrink: 0; position: sticky; top: 88px;
+  max-height: calc(100vh - 112px); overflow-y: auto;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
 .sb-title { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 14px; }
 .sidebar .resolve-col { margin-bottom: 16px; }
@@ -72,7 +72,11 @@ th.sortable:hover { color: var(--text); }
 
 header.top {
   display: flex; align-items: center; gap: 16px;
-  margin-bottom: 20px;
+  position: sticky; top: 0; z-index: 40;
+  /* Opaque background + full-bleed padding so cards scroll cleanly underneath. */
+  background: var(--bg);
+  margin: -16px -24px 20px; padding: 16px 24px;
+  border-bottom: 1px solid var(--line);
 }
 header.top h1 { font-size: 20px; margin: 0; letter-spacing: 0.3px; }
 header.top .spacer { flex: 1; }
