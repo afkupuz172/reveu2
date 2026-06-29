@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
-import { fetchClient, fetchClients, fetchOverview, fetchResolve } from "./api";
+import { fetchClient, fetchClients, fetchOverviewRow, fetchResolve } from "./api";
 import type { ClientListItem, ClientSummary, CompanyResolution, Overview } from "../shared/types";
 import Dashboard from "./components/Dashboard";
 import Sidebar from "./components/Sidebar";
 import CompanySelect from "./components/CompanySelect";
 import OverviewPage from "./components/OverviewPage";
+import LoadingBar from "./components/LoadingBar";
 import DetailsModal, { type ContribField } from "./components/DetailsModal";
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export default function App() {
   const [clients, setClients] = useState<ClientListItem[]>([]);
@@ -20,16 +23,22 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [details, setDetails] = useState<{ field: ContribField; label: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loadPhase, setLoadPhase] = useState<"idle" | "list" | "resolving" | "billing">("list");
+  const [ovProgress, setOvProgress] = useState<{ current: number; total: number; detail: string } | null>(null);
 
   // 1. Load companies.
   useEffect(() => {
+    setLoadPhase("list");
     fetchClients()
       .then((list) => {
         setClients(list);
         if (list[0]) setCompanyId(list[0].id);
+        else setLoadPhase("idle");
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => {
+        setError(String(e));
+        setLoadPhase("idle");
+      });
   }, []);
 
   // 2. Company chosen → resolve candidates, seed selections with the best default.
@@ -38,32 +47,85 @@ export default function App() {
     setResolution(null);
     setData(null);
     setError(null);
+    setLoadPhase("resolving");
     fetchResolve(companyId)
       .then((r) => {
         setResolution(r);
         setStripeSel(r.defaults.stripeId ? [r.defaults.stripeId] : []);
         setQboSel(r.defaults.quickbooksId ? [r.defaults.quickbooksId] : []);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => {
+        setError(String(e));
+        setLoadPhase("idle");
+      });
   }, [companyId]);
 
   // 3. Selection changed → recompute from all selected resources.
   useEffect(() => {
     if (!resolution || resolution.company.id !== companyId) return;
-    setLoading(true);
+    setLoadPhase("billing");
     fetchClient(companyId, stripeSel, qboSel)
       .then(setData)
       .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+      .finally(() => setLoadPhase("idle"));
   }, [resolution, stripeSel, qboSel, companyId]);
 
-  // Load the overview the first time the tab is opened.
+  // Overview: load progressively so we can report which company is being collected.
   useEffect(() => {
     if (view !== "overview" || overview) return;
-    fetchOverview()
-      .then(setOverview)
-      .catch((e) => setError(String(e)));
-  }, [view, overview]);
+    let cancelled = false;
+    (async () => {
+      setError(null);
+      setOvProgress({ current: 0, total: 0, detail: "Loading company list from HubSpot…" });
+      try {
+        const list = clients.length ? clients : await fetchClients();
+        const cy = Array<number>(12).fill(0);
+        const ly = Array<number>(12).fill(0);
+        const rows = [];
+        let mock = false;
+        for (let i = 0; i < list.length; i++) {
+          if (cancelled) return;
+          setOvProgress({ current: i, total: list.length, detail: `Collecting Stripe & QuickBooks data for ${list[i].name}` });
+          const r = await fetchOverviewRow(list[i].id);
+          rows.push(r.row);
+          mock = r.mock;
+          r.revenue.currentYear.forEach((v, m) => (cy[m] += v));
+          r.revenue.lastYear.forEach((v, m) => (ly[m] += v));
+        }
+        if (cancelled) return;
+        let expanding = 0,
+          flat = 0,
+          contracting = 0,
+          noData = 0;
+        const vals: number[] = [];
+        for (const row of rows) {
+          if (row.nrr == null) noData++;
+          else {
+            vals.push(row.nrr);
+            if (row.nrr > 100) expanding++;
+            else if (row.nrr === 100) flat++;
+            else contracting++;
+          }
+        }
+        const average = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+        setOverview({
+          companies: rows,
+          revenue: { months: MONTHS, currentYear: cy, lastYear: ly },
+          nrrHealth: { expanding, flat, contracting, noData, average },
+          mock,
+        });
+        setOvProgress(null);
+      } catch (e) {
+        if (!cancelled) {
+          setError(String(e));
+          setOvProgress(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [view, overview, clients]);
 
   const toggle = (setter: typeof setStripeSel) => (id: string) =>
     setter((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -108,7 +170,15 @@ export default function App() {
 
       {view === "overview" ? (
         <main className="main">
-          {overview ? <OverviewPage data={overview} onOpen={openCompany} /> : <div className="spinner">Loading overview…</div>}
+          {overview ? (
+            <OverviewPage data={overview} onOpen={openCompany} />
+          ) : (
+            <LoadingBar
+              title="Building portfolio overview"
+              detail={ovProgress?.detail ?? "Starting…"}
+              progress={ovProgress && ovProgress.total > 0 ? { current: ovProgress.current, total: ovProgress.total } : undefined}
+            />
+          )}
         </main>
       ) : (
         <div className="layout">
@@ -132,9 +202,23 @@ export default function App() {
                 Running in <strong>mock mode</strong> — sample data. Add HubSpot &amp; Stripe keys in <code>.env</code> to go live.
               </div>
             )}
-            {loading && <div className="spinner">Loading…</div>}
-            {!loading && data && (
-              <Dashboard data={data} admin={admin} onDetails={(field, label) => setDetails({ field, label })} />
+            {loadPhase !== "idle" ? (
+              loadPhase === "list" ? (
+                <LoadingBar title="Loading companies" detail="Fetching your companies from HubSpot…" />
+              ) : (
+                <LoadingBar
+                  title={`Loading ${clients.find((c) => c.id === companyId)?.name ?? "company"}`}
+                  steps={[
+                    { label: "Matching Stripe & QuickBooks resources", status: loadPhase === "resolving" ? "active" : "done" },
+                    {
+                      label: "Fetching billing & CRM data",
+                      status: loadPhase === "resolving" ? "pending" : "active",
+                    },
+                  ]}
+                />
+              )
+            ) : (
+              data && <Dashboard data={data} admin={admin} onDetails={(field, label) => setDetails({ field, label })} />
             )}
           </main>
         </div>

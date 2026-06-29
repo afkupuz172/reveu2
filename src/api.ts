@@ -1,4 +1,10 @@
-import type { ClientListItem, ClientSummary, CompanyResolution, Overview } from "../shared/types";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview, OverviewRow } from "../shared/types";
+
+export interface OverviewRowResponse {
+  row: OverviewRow;
+  revenue: { currentYear: number[]; lastYear: number[] };
+  mock: boolean;
+}
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -11,6 +17,7 @@ export const fetchClients = () => get<ClientListItem[]>("/api/clients");
 export const fetchResolve = (companyId: string) => get<CompanyResolution>(`/api/company/${companyId}/resolve`);
 
 export const fetchOverview = () => get<Overview>("/api/overview");
+export const fetchOverviewRow = (id: string) => get<OverviewRowResponse>(`/api/overview/row/${id}`);
 
 // stripeIds/qboIds: array of resource ids (empty = none), undefined = server default.
 export function fetchClient(

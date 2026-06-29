@@ -10,7 +10,7 @@ import { assembleSummary } from "./assemble";
 import { mockClientRaw, mockList, mockResolve } from "./mock";
 import { hasLiveKeys, hasStripe, liveClientRaw, liveList, liveResolve } from "./live";
 import { authorizeUrl, exchangeCode, hasCredentials, hasQbo } from "./qbo";
-import { buildOverview } from "./overview";
+import { buildOverview, buildOverviewRow } from "./overview";
 import type { ClientListItem, ClientSummary, CompanyResolution, Overview } from "../shared/types";
 
 const app = express();
@@ -110,6 +110,23 @@ app.get("/api/overview", async (_req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to load overview", detail: String(err) });
+  }
+});
+
+// One company's overview row + revenue buckets — lets the client load the
+// portfolio progressively and report which company it's collecting.
+app.get("/api/overview/row/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await cached(`overview-row:${id}`, async () => {
+      const raw = LIVE ? await liveClientRaw(id) : mockClientRaw(id);
+      const r = buildOverviewRow(raw);
+      return { row: r.row, revenue: { currentYear: r.currentYear, lastYear: r.lastYear }, mock: !LIVE };
+    });
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(404).json({ error: "Overview row not found", detail: String(err) });
   }
 });
 

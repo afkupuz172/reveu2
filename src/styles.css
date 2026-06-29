@@ -171,3 +171,20 @@ td a { color: var(--accent); text-decoration: none; }
 .muted { color: var(--muted); }
 .empty { color: var(--muted); padding: 20px 0; text-align: center; }
 .spinner { color: var(--muted); padding: 60px; text-align: center; }
+
+/* Loading bar */
+.loading { max-width: 540px; margin: 48px auto; }
+.loading-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+.loading-detail { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+.loading-track { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; position: relative; }
+.loading-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
+.loading-fill.indeterminate { position: absolute; width: 38%; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { 0% { left: -38%; } 100% { left: 100%; } }
+.loading-steps { list-style: none; padding: 0; margin: 16px 0 0; }
+.loading-steps li { display: flex; align-items: center; gap: 9px; padding: 5px 0; color: var(--muted); font-size: 13px; }
+.loading-steps li.active { color: var(--text); }
+.loading-steps li.done { color: var(--good); }
+.step-dot { width: 16px; display: inline-flex; justify-content: center; }
+.spin { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent);
+  border-radius: 50%; animation: rot .7s linear infinite; display: inline-block; }
+@keyframes rot { to { transform: rotate(360deg); } }
