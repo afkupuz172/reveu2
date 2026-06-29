@@ -1,4 +1,4 @@
-import type { ClientListItem, ClientSummary } from "../shared/types";
+import type { ClientListItem, ClientSummary, CompanyResolution } from "../shared/types";
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -7,4 +7,18 @@ async function get<T>(url: string): Promise<T> {
 }
 
 export const fetchClients = () => get<ClientListItem[]>("/api/clients");
-export const fetchClient = (id: string) => get<ClientSummary>(`/api/client/${id}`);
+
+export const fetchResolve = (companyId: string) => get<CompanyResolution>(`/api/company/${companyId}/resolve`);
+
+// stripeIds/qboIds: array of resource ids (empty = none), undefined = server default.
+export function fetchClient(
+  companyId: string,
+  stripeIds?: string[],
+  qboIds?: string[],
+): Promise<ClientSummary> {
+  const qs = new URLSearchParams();
+  if (stripeIds !== undefined) qs.set("stripe", stripeIds.length ? stripeIds.join(",") : "none");
+  if (qboIds !== undefined) qs.set("qbo", qboIds.length ? qboIds.join(",") : "none");
+  const q = qs.toString();
+  return get<ClientSummary>(`/api/client/${companyId}${q ? `?${q}` : ""}`);
+}

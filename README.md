@@ -6,6 +6,11 @@ hosting, no database.
 
 Built as the MVP slice of the "ClientLens" concept:
 
+- **Resolve & pick sources** — choose a HubSpot company; the app shows its contacts +
+  stored reference IDs and searches Stripe + QuickBooks by domain/name/ID, surfacing
+  ranked candidate resources (with match reasons). Manually pick which Stripe and
+  QuickBooks resource belong to the company; the dashboard recomputes from your choice.
+  Built for un-synced sources where matches are ambiguous.
 - **Hero summary** — rule-based plain-English status narrative.
 - **KPI row** — lifetime spend, MRR, ARR, outstanding balance, next renewal.
 - **Charts** — revenue (6 mo), invoices paid vs. outstanding, health-score factors.

@@ -7,10 +7,10 @@ import express from "express";
 import cors from "cors";
 import { cached, clearCache } from "./cache";
 import { assembleSummary } from "./assemble";
-import { MOCK, mockList } from "./mock";
-import { hasLiveKeys, liveClient, liveList } from "./live";
+import { mockClientRaw, mockList, mockResolve } from "./mock";
+import { hasLiveKeys, liveClientRaw, liveList, liveResolve } from "./live";
 import { authorizeUrl, exchangeCode, hasCredentials, hasQbo } from "./qbo";
-import type { ClientListItem, ClientSummary } from "../shared/types";
+import type { ClientListItem, ClientSummary, CompanyResolution } from "../shared/types";
 
 const app = express();
 app.use(cors());
@@ -73,16 +73,19 @@ app.get("/api/qbo/callback", async (req, res) => {
   }
 });
 
+// List of HubSpot companies (the anchor). Uses default resource matches just for
+// the at-a-glance band/MRR; the detail view lets the user re-pick resources.
 app.get("/api/clients", async (_req, res) => {
   try {
     const list = await cached<ClientListItem[]>("clients", async () => {
       if (!LIVE) {
-        return Object.values(MOCK).map((raw) => toListItem({ ...assembleSummary(raw), mock: true }));
+        return mockList().map((id) => toListItem({ ...assembleSummary(mockClientRaw(id)), mock: true }));
       }
       const companies = await liveList();
-      // Build list items from the full summary so health/MRR are accurate.
       return Promise.all(
-        companies.map(async (c) => toListItem(await cached(`client:${c.id}`, async () => assembleSummary(await liveClient(c.id))))),
+        companies.map(async (c) =>
+          toListItem(await cached(`client:${c.id}::default`, async () => assembleSummary(await liveClientRaw(c.id)))),
+        ),
       );
     });
     res.json(list);
@@ -92,16 +95,38 @@ app.get("/api/clients", async (_req, res) => {
   }
 });
 
-app.get("/api/client/:id", async (req, res) => {
+// Resolve a company → contacts, reference ids, and ranked Stripe/QBO candidates.
+app.get("/api/company/:id/resolve", async (req, res) => {
   const { id } = req.params;
   try {
-    const summary = await cached<ClientSummary>(`client:${id}`, async () => {
-      if (!LIVE) {
-        const raw = MOCK[id];
-        if (!raw) throw new Error(`Unknown client ${id}`);
-        return { ...assembleSummary(raw), mock: true };
-      }
-      return assembleSummary(await liveClient(id));
+    const resolution = await cached<CompanyResolution>(`resolve:${id}`, async () =>
+      LIVE ? liveResolve(id) : mockResolve(id),
+    );
+    res.json(resolution);
+  } catch (err) {
+    console.error(err);
+    res.status(404).json({ error: "Company not found", detail: String(err) });
+  }
+});
+
+// Build the dashboard for a company using selected resources. ?stripe= / ?qbo=
+// take comma-separated id lists; omitted → server defaults; "none" → that source off.
+function parseIds(param: unknown): string[] | undefined {
+  if (param === undefined) return undefined;
+  const raw = String(param);
+  if (raw === "none" || raw === "") return [];
+  return raw.split(",").filter(Boolean);
+}
+
+app.get("/api/client/:id", async (req, res) => {
+  const { id } = req.params;
+  const stripeIds = parseIds(req.query.stripe);
+  const qboIds = parseIds(req.query.qbo);
+  const key = `client:${id}::s=${stripeIds?.join("+") ?? "default"}::q=${qboIds?.join("+") ?? "default"}`;
+  try {
+    const summary = await cached<ClientSummary>(key, async () => {
+      const raw = LIVE ? await liveClientRaw(id, stripeIds, qboIds) : mockClientRaw(id, stripeIds, qboIds);
+      return { ...assembleSummary(raw), mock: !LIVE };
     });
     res.json(summary);
   } catch (err) {

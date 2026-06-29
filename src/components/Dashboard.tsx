@@ -1,17 +1,33 @@
 import type { ClientSummary, Conflict, HealthBand } from "../../shared/types";
 import { ArAgingBars, HealthFactors, InvoiceChart, RevenueChart } from "./Charts";
 import { DealsTable, InvoicesTable, TicketsTable } from "./Tables";
+import type { ContribField } from "./DetailsModal";
 
 const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
 const bandClass = (b: HealthBand) => (b === "Good" ? "good" : b === "Action needed" ? "warn" : "risk");
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
 
-function Kpi({ label, value }: { label: string; value: string }) {
+function Kpi({
+  label,
+  value,
+  field,
+  onDetails,
+}: {
+  label: string;
+  value: string;
+  field?: ContribField;
+  onDetails?: (f: ContribField, label: string) => void;
+}) {
   return (
     <div className="card kpi">
       <div className="label">{label}</div>
       <div className="value">{value}</div>
+      {field && onDetails && (
+        <button className="details-btn" onClick={() => onDetails(field, label)}>
+          Details
+        </button>
+      )}
     </div>
   );
 }
@@ -38,7 +54,15 @@ function ConflictsCard({ conflicts }: { conflicts: Conflict[] }) {
   );
 }
 
-export default function Dashboard({ data, admin }: { data: ClientSummary; admin: boolean }) {
+export default function Dashboard({
+  data,
+  admin,
+  onDetails,
+}: {
+  data: ClientSummary;
+  admin: boolean;
+  onDetails?: (f: ContribField, label: string) => void;
+}) {
   const { company, link, kpis, health, charts, reconciliation, billing } = data;
 
   return (
@@ -66,10 +90,10 @@ export default function Dashboard({ data, admin }: { data: ClientSummary; admin:
 
       {/* KPI row */}
       <div className="grid kpis">
-        <Kpi label="Lifetime spend" value={usd(kpis.lifetimeSpend)} />
-        <Kpi label="MRR" value={usd(kpis.mrr)} />
-        <Kpi label="ARR" value={usd(kpis.arr)} />
-        <Kpi label="Outstanding" value={usd(kpis.outstandingBalance)} />
+        <Kpi label="Lifetime spend" value={usd(kpis.lifetimeSpend)} field="lifetimeSpend" onDetails={onDetails} />
+        <Kpi label="MRR" value={usd(kpis.mrr)} field="mrr" onDetails={onDetails} />
+        <Kpi label="ARR" value={usd(kpis.arr)} field="arr" onDetails={onDetails} />
+        <Kpi label="Outstanding" value={usd(kpis.outstandingBalance)} field="outstanding" onDetails={onDetails} />
         <Kpi label="Next renewal" value={fmtDate(kpis.nextRenewal)} />
       </div>
 

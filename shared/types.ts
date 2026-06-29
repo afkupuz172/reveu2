@@ -23,6 +23,35 @@ export interface ClientListItem {
   mrr: number;
 }
 
+// A HubSpot contact associated with the selected company.
+export interface Contact {
+  name: string;
+  email: string | null;
+  title: string | null;
+}
+
+// A candidate Stripe/QBO resource that might belong to the selected company,
+// with the contact info found there and why the matcher surfaced it.
+export interface ResourceCandidate {
+  source: DataSource;
+  id: string; // Stripe customer id (cus_…) or QBO Customer Id
+  label: string; // display name on the resource
+  email: string | null;
+  sublabel: string | null; // extra context, e.g. plan / balance hint
+  matchReasons: string[]; // ["Stored reference ID", "Email domain nimbus.io", "Name match"]
+  score: number; // 0–100 confidence
+}
+
+// What the resolve step returns: the HubSpot anchor + candidate resources to pick from.
+export interface CompanyResolution {
+  company: { id: string; name: string; domain: string; owner: string; lifecycle: string };
+  contacts: Contact[];
+  references: { stripeCustomerId: string | null; quickbooksCustomerId: string | null };
+  candidates: { stripe: ResourceCandidate[]; quickbooks: ResourceCandidate[] };
+  defaults: { stripeId: string | null; quickbooksId: string | null };
+  mock: boolean;
+}
+
 // Normalized data assembled from HubSpot + Stripe before any computation.
 // Both mock mode and the live API path produce this shape.
 export interface RawClientData {
@@ -73,6 +102,22 @@ export interface RawClientData {
     payments: { amount: number; date: string }[];
     arAging: ArAging;
   } | null;
+  // Per-resource standalone contributions (one per selected Stripe/QBO customer),
+  // used to break down how each total is composed in the details modal.
+  contributions?: ResourceContribution[];
+  selectedStripeIds?: string[];
+  selectedQuickbooksIds?: string[];
+}
+
+// One selected resource's standalone contribution to the combined totals.
+export interface ResourceContribution {
+  id: string;
+  source: DataSource;
+  label: string;
+  lifetimeSpend: number;
+  mrr: number;
+  arr: number;
+  outstanding: number;
 }
 
 export interface HealthFactor {
@@ -142,5 +187,9 @@ export interface ClientSummary {
     arAging: ArAging | null; // QBO enrichment
     conflicts: Conflict[]; // Stripe vs QBO disagreements
   };
+  // Which external resources produced this view (echoes the user's selection).
+  selected: { stripeIds: string[]; quickbooksIds: string[] };
+  // Per-resource breakdown of the totals (for the details modal).
+  contributions: ResourceContribution[];
   mock: boolean;
 }

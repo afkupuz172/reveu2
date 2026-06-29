@@ -151,22 +151,12 @@ export async function qboCreate<T = unknown>(entity: string, body: unknown): Pro
 
 const esc = (s: string) => s.replace(/'/g, "\\'");
 const iso = (d?: string) => (d ? new Date(d).toISOString() : new Date().toISOString());
+const firstToken = (s: string) => s.trim().split(/\s+/)[0] ?? s;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export async function fetchQbo(companyName: string, domain: string): Promise<RawClientData["qbo"]> {
-  // Match a QBO customer by display name, then fall back to email domain.
-  const byName = await query<{ QueryResponse: { Customer?: any[] } }>(
-    `SELECT * FROM Customer WHERE DisplayName = '${esc(companyName)}'`,
-  );
-  let customer = byName.QueryResponse.Customer?.[0];
-  if (!customer && domain) {
-    const all = await query<{ QueryResponse: { Customer?: any[] } }>(`SELECT * FROM Customer MAXRESULTS 200`);
-    customer = (all.QueryResponse.Customer ?? []).find((c) =>
-      (c.PrimaryEmailAddr?.Address ?? "").toLowerCase().endsWith(domain.toLowerCase()),
-    );
-  }
-  if (!customer) return null;
 
+// Build the normalized qbo block (invoices/payments/aging) from a QBO customer.
+async function buildFromCustomer(customer: any): Promise<NonNullable<RawClientData["qbo"]>> {
   const id = customer.Id as string;
   const [invRes, payRes] = await Promise.all([
     query<{ QueryResponse: { Invoice?: any[] } }>(`SELECT * FROM Invoice WHERE CustomerRef = '${id}' MAXRESULTS 200`),
@@ -208,7 +198,7 @@ export async function fetchQbo(companyName: string, domain: string): Promise<Raw
 
   return {
     customerId: id,
-    displayName: (customer.DisplayName as string) || companyName,
+    displayName: (customer.DisplayName as string) || "(unnamed)",
     balance: Number(customer.Balance) || 0,
     totalIncome: payments.reduce((s, p) => s + p.amount, 0),
     terms: customer.SalesTermRef?.name ?? null,
@@ -216,4 +206,63 @@ export async function fetchQbo(companyName: string, domain: string): Promise<Raw
     payments,
     arAging,
   };
+}
+
+/** Auto-match a QBO customer by display name, then email domain. */
+export async function fetchQbo(companyName: string, domain: string): Promise<RawClientData["qbo"]> {
+  const byName = await query<{ QueryResponse: { Customer?: any[] } }>(
+    `SELECT * FROM Customer WHERE DisplayName = '${esc(companyName)}'`,
+  );
+  let customer = byName.QueryResponse.Customer?.[0];
+  if (!customer && domain) {
+    const all = await query<{ QueryResponse: { Customer?: any[] } }>(`SELECT * FROM Customer MAXRESULTS 200`);
+    customer = (all.QueryResponse.Customer ?? []).find((c) =>
+      (c.PrimaryEmailAddr?.Address ?? "").toLowerCase().endsWith(domain.toLowerCase()),
+    );
+  }
+  if (!customer) return null;
+  return buildFromCustomer(customer);
+}
+
+/** Fetch a specific QBO customer by id (used when the user picks a resource). */
+export async function fetchQboById(customerId: string): Promise<RawClientData["qbo"]> {
+  const res = await query<{ QueryResponse: { Customer?: any[] } }>(
+    `SELECT * FROM Customer WHERE Id = '${esc(customerId)}'`,
+  );
+  const customer = res.QueryResponse.Customer?.[0];
+  return customer ? buildFromCustomer(customer) : null;
+}
+
+/** Candidate QBO customers for a company, by name token + email domain. */
+export async function searchQboCandidates(
+  companyName: string,
+  domain: string,
+): Promise<{ id: string; label: string; email: string | null; sublabel: string | null }[]> {
+  const map = new Map<string, { id: string; label: string; email: string | null; sublabel: string | null }>();
+  const add = (c: any) =>
+    map.set(c.Id, {
+      id: c.Id,
+      label: (c.DisplayName as string) || (c.CompanyName as string) || c.Id,
+      email: c.PrimaryEmailAddr?.Address ?? null,
+      sublabel: c.Balance != null ? `Balance $${Number(c.Balance).toLocaleString()}` : null,
+    });
+  try {
+    const byName = await query<{ QueryResponse: { Customer?: any[] } }>(
+      `SELECT * FROM Customer WHERE DisplayName LIKE '%${esc(firstToken(companyName))}%' MAXRESULTS 25`,
+    );
+    (byName.QueryResponse.Customer ?? []).forEach(add);
+  } catch {
+    /* ignore */
+  }
+  if (domain) {
+    try {
+      const all = await query<{ QueryResponse: { Customer?: any[] } }>(`SELECT * FROM Customer MAXRESULTS 200`);
+      (all.QueryResponse.Customer ?? [])
+        .filter((c) => (c.PrimaryEmailAddr?.Address ?? "").toLowerCase().endsWith(domain.toLowerCase()))
+        .forEach(add);
+    } catch {
+      /* ignore */
+    }
+  }
+  return [...map.values()];
 }
