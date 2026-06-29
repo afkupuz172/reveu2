@@ -8,7 +8,7 @@ import cors from "cors";
 import { cached, clearCache } from "./cache";
 import { assembleSummary } from "./assemble";
 import { mockClientRaw, mockList, mockResolve } from "./mock";
-import { hasLiveKeys, liveClientRaw, liveList, liveResolve } from "./live";
+import { hasLiveKeys, hasStripe, liveClientRaw, liveList, liveResolve } from "./live";
 import { authorizeUrl, exchangeCode, hasCredentials, hasQbo } from "./qbo";
 import type { ClientListItem, ClientSummary, CompanyResolution } from "../shared/types";
 
@@ -18,8 +18,8 @@ app.use(cors());
 const LIVE = hasLiveKeys();
 console.log(
   LIVE
-    ? "[ReVue2] Live mode — using HubSpot + Stripe APIs."
-    : "[ReVue2] MOCK mode — no keys set. Serving sample data. See .env.example to go live.",
+    ? `[ReVue2] Live mode — HubSpot${hasStripe() ? " + Stripe" : " (no STRIPE_KEY — Stripe billing off)"}.`
+    : "[ReVue2] MOCK mode — no HUBSPOT_PA_KEY set. Serving sample data. See .env.example to go live.",
 );
 if (hasCredentials()) {
   console.log(

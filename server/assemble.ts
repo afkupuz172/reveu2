@@ -35,6 +35,31 @@ function daysUntil(iso: string): number {
 const money = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
 const digits = (s: string) => s.replace(/\D/g, "");
 
+// Net Revenue Retention (trailing ~12 months) from this client's recurring
+// revenue: current MRR vs. the oldest monthly recurring revenue in the window.
+// Stripe-based (QuickBooks has no subscriptions). null without a baseline.
+function computeNrr(
+  charges: { amount: number; date: string }[],
+  mrrNow: number,
+): ClientSummary["nrr"] {
+  const byMonth = new Map<string, number>();
+  for (const c of charges) byMonth.set(monthKey(c.date), (byMonth.get(monthKey(c.date)) ?? 0) + c.amount);
+  const keys = lastNMonths(13).map((m) => m.key); // oldest → newest
+  const present = keys.filter((k) => (byMonth.get(k) ?? 0) > 0);
+  if (present.length < 2) return { value: null, currentMrr: mrrNow, baselineMrr: 0, windowMonths: 0 };
+  const baselineKey = present[0];
+  const currentKey = present[present.length - 1];
+  const baselineMrr = byMonth.get(baselineKey) ?? 0;
+  const currentMrr = mrrNow > 0 ? mrrNow : byMonth.get(currentKey) ?? 0;
+  const windowMonths = keys.indexOf(currentKey) - keys.indexOf(baselineKey);
+  return {
+    value: baselineMrr > 0 ? Math.round((currentMrr / baselineMrr) * 100) : null,
+    currentMrr,
+    baselineMrr,
+    windowMonths,
+  };
+}
+
 // Same invoice number in both Stripe and QBO but a different status = a conflict.
 function detectConflicts(stripeInv: MergedInvoice[], qboInv: MergedInvoice[]): Conflict[] {
   const conflicts: Conflict[] = [];
@@ -196,6 +221,7 @@ export function assembleSummary(raw: RawClientData): ClientSummary {
   });
 
   const kpis = { lifetimeSpend, mrr, arr: mrr * 12, outstandingBalance, nextRenewal };
+  const nrr = computeNrr(stripe?.charges ?? [], mrr);
 
   const source: DataSource | "none" = stripe ? "stripe" : qbo ? "quickbooks" : "none";
   const billing: ClientSummary["billing"] = {
@@ -228,6 +254,7 @@ export function assembleSummary(raw: RawClientData): ClientSummary {
     summary: buildSummary(raw, kpis, billing, invoices),
     health: buildHealth(raw, invoices, source !== "none"),
     kpis,
+    nrr,
     charts: { revenueOverTime, invoices: invoiceChart },
     subscriptions: subs,
     deals: raw.deals,

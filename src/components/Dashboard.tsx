@@ -13,16 +13,21 @@ function Kpi({
   value,
   field,
   onDetails,
+  sub,
+  title,
 }: {
   label: string;
   value: string;
   field?: ContribField;
   onDetails?: (f: ContribField, label: string) => void;
+  sub?: string;
+  title?: string;
 }) {
   return (
-    <div className="card kpi">
+    <div className="card kpi" title={title}>
       <div className="label">{label}</div>
       <div className="value">{value}</div>
+      {sub && <div className="kpi-sub muted">{sub}</div>}
       {field && onDetails && (
         <button className="details-btn" onClick={() => onDetails(field, label)}>
           Details
@@ -63,7 +68,7 @@ export default function Dashboard({
   admin: boolean;
   onDetails?: (f: ContribField, label: string) => void;
 }) {
-  const { company, link, kpis, health, charts, reconciliation, billing } = data;
+  const { company, link, kpis, health, charts, reconciliation, billing, nrr } = data;
 
   return (
     <div>
@@ -94,6 +99,16 @@ export default function Dashboard({
         <Kpi label="MRR" value={usd(kpis.mrr)} field="mrr" onDetails={onDetails} />
         <Kpi label="ARR" value={usd(kpis.arr)} field="arr" onDetails={onDetails} />
         <Kpi label="Outstanding" value={usd(kpis.outstandingBalance)} field="outstanding" onDetails={onDetails} />
+        <Kpi
+          label="NRR"
+          value={nrr.value != null ? `${nrr.value}%` : "—"}
+          sub={
+            nrr.value != null
+              ? `${usd(nrr.currentMrr)} now vs ${usd(nrr.baselineMrr)} ${nrr.windowMonths}mo ago`
+              : "no year-ago baseline"
+          }
+          title="Net Revenue Retention = current MRR ÷ MRR at start of trailing window × 100"
+        />
         <Kpi label="Next renewal" value={fmtDate(kpis.nextRenewal)} />
       </div>
 

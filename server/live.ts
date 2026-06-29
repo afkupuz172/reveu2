@@ -17,8 +17,13 @@ const HUBSPOT_ACCESS_TOKEN = process.env.HUBSPOT_PA_KEY;
 const HUBSPOT_DEVELOPER_KEY = process.env.HUBSPOT_DEV_KEY;
 const STRIPE_KEY = process.env.STRIPE_KEY;
 
+// HubSpot is the anchor (drives the company list), so live mode only needs it.
+// Stripe + QuickBooks are optional billing sources that degrade gracefully.
 function hasLiveKeys(): boolean {
-  return Boolean(HUBSPOT_ACCESS_TOKEN && STRIPE_KEY);
+  return Boolean(HUBSPOT_ACCESS_TOKEN);
+}
+function hasStripe(): boolean {
+  return Boolean(STRIPE_KEY);
 }
 
 async function hubspotClient() {
@@ -228,10 +233,10 @@ export async function liveClientRaw(
   const f = companyFields(id, company.properties);
   const [deals, tickets] = await Promise.all([fetchDeals(hs, id), fetchTickets(hs, id)]);
 
-  // Stripe resources.
+  // Stripe resources (skipped entirely when no STRIPE_KEY is configured).
   const sIds = stripeIds ?? (f.stripeRef ? [f.stripeRef] : []);
   const stripes: SelStripe[] = [];
-  if (sIds.length) {
+  if (sIds.length && hasStripe()) {
     const sc = await stripeClient();
     for (const sid of sIds) {
       try {
@@ -293,15 +298,17 @@ export async function liveResolve(id: string): Promise<CompanyResolution> {
   const contacts = await fetchContacts(hs, id);
 
   let stripeCands: ResourceCandidate[] = [];
-  try {
-    const records = await searchStripeCandidates(await stripeClient(), f.company.name, f.company.domain, f.stripeRef);
-    stripeCands = rankCandidates("stripe", records, {
-      companyName: f.company.name,
-      domain: f.company.domain,
-      storedId: f.stripeRef,
-    });
-  } catch (e) {
-    console.warn(`[ReVue2] Stripe candidate search failed: ${String(e)}`);
+  if (hasStripe()) {
+    try {
+      const records = await searchStripeCandidates(await stripeClient(), f.company.name, f.company.domain, f.stripeRef);
+      stripeCands = rankCandidates("stripe", records, {
+        companyName: f.company.name,
+        domain: f.company.domain,
+        storedId: f.stripeRef,
+      });
+    } catch (e) {
+      console.warn(`[ReVue2] Stripe candidate search failed: ${String(e)}`);
+    }
   }
 
   let qboCands: ResourceCandidate[] = [];
@@ -331,4 +338,4 @@ export async function liveResolve(id: string): Promise<CompanyResolution> {
   };
 }
 
-export { hasLiveKeys };
+export { hasLiveKeys, hasStripe };

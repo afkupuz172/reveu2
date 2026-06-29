@@ -163,6 +163,10 @@ export interface ClientSummary {
     outstandingBalance: number;
     nextRenewal: string | null;
   };
+  // Net Revenue Retention: current recurring revenue vs. the baseline a year ago.
+  // value is a percentage (100 = flat, >100 expansion, <100 contraction/churn);
+  // null when there's no year-old baseline to compare against.
+  nrr: { value: number | null; currentMrr: number; baselineMrr: number; windowMonths: number };
   charts: {
     revenueOverTime: MonthPoint[];
     invoices: MonthPoint[]; // paid vs outstanding per month

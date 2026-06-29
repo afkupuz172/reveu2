@@ -102,7 +102,11 @@ const STRIPE: Record<string, Resource<StripeData>> = {
         { plan: "Pro", status: "active", mrr: 1200, start: isoMonthsAgo(11), currentPeriodEnd: isoDaysFromNow(24), autoRenew: true },
       ],
       invoices: monthlyPaidInvoices(1200, 6),
-      charges: monthlyCharges(1200, 12),
+      // Upsell history: started at $900/mo, now $1,200/mo → NRR expansion.
+      charges: [
+        ...Array.from({ length: 6 }, (_, i) => ({ amount: 900, date: isoMonthsAgo(11 - i) })),
+        ...Array.from({ length: 6 }, (_, i) => ({ amount: 1200, date: isoMonthsAgo(5 - i) })),
+      ],
     },
   },
   cus_nimbus: {
