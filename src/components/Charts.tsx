@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { ArAging, ClientSummary, HealthFactor, MonthPoint, Overview } from "../../shared/types";
+import type { ArAging, ClientSummary, HealthFactor, MonthPoint, Overview, Overview2 } from "../../shared/types";
 
 const money = (n: number) => `$${Math.round(n).toLocaleString()}`;
 
@@ -74,6 +74,70 @@ export function RevenueOverlayChart({ revenue }: { revenue: Overview["revenue"] 
         <Legend wrapperStyle={{ fontSize: 12 }} />
         <Line type="monotone" dataKey="Last year" stroke="#8a97b1" strokeWidth={2} strokeDasharray="5 4" dot={false} />
         <Line type="monotone" dataKey="This year" stroke="#5b8cff" strokeWidth={2} dot={{ r: 3 }} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+const GREENS = ["#2fb774", "#1b8f57", "#0f6e41", "#6fd39a"];
+const ORANGES = ["#e0a13a", "#c47f1f", "#a36314", "#efc173"];
+
+// Custom tooltip: each series' cumulative value + the deals that closed this month.
+function TrendTooltip({ active, payload, label }: { active?: boolean; label?: string; payload?: any[] }) {
+  if (!active || !payload?.length) return null;
+  const deals = (payload[0].payload.deals ?? []) as Overview2["months"][number]["deals"];
+  return (
+    <div style={{ background: "#131c31", border: "1px solid #25324f", borderRadius: 8, color: "#e6ecf7", padding: 10, fontSize: 12, maxWidth: 320 }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      {payload.map((p) => (
+        <div key={p.dataKey} style={{ color: p.stroke }}>
+          {p.dataKey}: {usd(p.value)}
+        </div>
+      ))}
+      {deals.length > 0 && (
+        <div style={{ marginTop: 6, borderTop: "1px solid #25324f", paddingTop: 6 }}>
+          <div style={{ color: "#8a97b1", marginBottom: 2 }}>Closed this month:</div>
+          {deals.map((d, i) => (
+            <div key={i} style={{ marginBottom: 2 }}>
+              <span style={{ color: d.kind === "realized" ? "#2fb774" : "#e0a13a" }}>●</span> {d.company} — {d.name} · {usd(d.amount)}{" "}
+              <span style={{ color: "#8a97b1" }}>({d.year})</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Overview2: one cumulative line per year — realized (closed-won, green) and expected
+// (open, orange) — over a Jan–Dec axis. Hovering a month lists that month's deals.
+export function RealizedExpectedChart({ series, months }: { series: Overview2["series"]; months: Overview2["months"] }) {
+  const data = months.map((m) => ({ month: m.month, deals: m.deals, ...m.values }));
+  const colorOf = new Map<string, string>();
+  let g = 0;
+  let o = 0;
+  for (const s of series) colorOf.set(s.label, s.kind === "realized" ? GREENS[g++ % GREENS.length] : ORANGES[o++ % ORANGES.length]);
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <LineChart data={data} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
+        <CartesianGrid stroke={grid} vertical={false} />
+        <XAxis dataKey="month" {...axis} />
+        <YAxis {...axis} tickFormatter={usd} width={56} />
+        <Tooltip content={<TrendTooltip />} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        {series.map((s) => (
+          <Line
+            key={s.label}
+            type="monotone"
+            dataKey={s.label}
+            name={s.label}
+            stroke={colorOf.get(s.label)}
+            strokeWidth={2}
+            strokeDasharray={s.kind === "expected" ? "5 4" : undefined}
+            dot={{ r: 3 }}
+            activeDot={{ r: 5 }}
+          />
+        ))}
       </LineChart>
     </ResponsiveContainer>
   );

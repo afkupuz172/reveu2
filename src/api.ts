@@ -1,4 +1,4 @@
-import type { ClientListItem, ClientSummary, CompanyResolution, Overview, OverviewRow, ScopeOption } from "../shared/types";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview, Overview2, OverviewRow, ScopeOption } from "../shared/types";
 
 export interface OverviewRowResponse {
   row: OverviewRow;
@@ -28,6 +28,12 @@ export const fetchOverview = (scope?: { kind: string; value: string }) => get<Ov
 
 export const fetchOverviewRow = (id: string, scope?: { kind: string; value: string }) =>
   get<OverviewRowResponse>(`/api/overview/row/${id}${scopeQs(scope)}`);
+
+// Overview2: products library + the product/closed-year deal-pair overview.
+export const fetchProducts = () => get<string[]>("/api/products");
+
+export const fetchOverview2 = (products: string[], year: number) =>
+  get<Overview2>(`/api/overview2?products=${encodeURIComponent(products.join(","))}&year=${year}`);
 
 // stripeIds/qboIds: array of resource ids (empty = none), undefined = server default.
 export function fetchClient(

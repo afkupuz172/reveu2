@@ -119,6 +119,12 @@ select:focus, button:focus { outline: 2px solid var(--accent); }
 .dealtype-card:hover { border-color: var(--accent); }
 .dealtype-label { font-size: 16px; font-weight: 600; color: var(--text); }
 
+/* Overview2 product multi-select */
+.product-pick { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.product-pick .pick { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+  border: 1px solid var(--line); border-radius: 999px; cursor: pointer; font-size: 13px; background: var(--panel-2); }
+.product-pick .pick.on { border-color: var(--accent); color: var(--accent); }
+
 .mock-banner {
   background: rgba(91,140,255,.12); border: 1px solid rgba(91,140,255,.35);
   color: #b9ccff; padding: 8px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 13px;

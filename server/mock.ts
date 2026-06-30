@@ -10,6 +10,7 @@ import { rankCandidates, type ResourceRecord } from "./match";
 import { combineResources } from "./combine";
 
 const STAGE_META: Record<string, { label: string; prob: number; closed: boolean; won: boolean }> = {
+  appointmentscheduled: { label: "Appointment scheduled", prob: 20, closed: false, won: false },
   qualifiedtobuy: { label: "Qualified to buy", prob: 20, closed: false, won: false },
   presentationscheduled: { label: "Presentation scheduled", prob: 60, closed: false, won: false },
   decisionmakerboughtin: { label: "Decision maker bought-in", prob: 80, closed: false, won: false },
@@ -27,6 +28,8 @@ function mkDeal(
   products: DealProduct[],
   invoiceNumber: string | null = null,
   dealType: string = "newbusiness",
+  id?: string,
+  associatedDealIds?: string[],
 ): Deal {
   const m = STAGE_META[stage] ?? { label: stage, prob: 50, closed: false, won: false };
   return {
@@ -43,6 +46,8 @@ function mkDeal(
     products,
     invoiceNumber,
     dealType,
+    id,
+    associatedDealIds,
   };
 }
 
@@ -160,18 +165,31 @@ const COMPANIES: Record<string, MockCompany> = {
         "INV-2052",
         "existingbusiness",
       ),
+      // Deal-to-deal pair: 2025 Enterprise closed-won, with an associated 2026
+      // Enterprise T2 upgrade (still open) → Overview2 NRR = 30000/20000 = 150%.
       mkDeal(
-        "Enterprise upgrade",
-        "decisionmakerboughtin",
-        24000,
-        isoDaysFromNow(40),
-        "Pending",
-        [
-          { name: "Enterprise license", quantity: 1, amount: 18000 },
-          { name: "Onboarding services", quantity: 1, amount: 6000 },
-        ],
+        "Enterprise 2025",
+        "closedwon",
+        20000,
+        isoMonthsAgo(9),
+        "Paid",
+        [{ name: "Enterprise license", quantity: 1, amount: 20000 }],
+        "INV-2090",
+        "existingbusiness",
+        "nimbus-ent-2025",
+        ["nimbus-ent-2026"],
+      ),
+      mkDeal(
+        "Enterprise T2 upgrade",
+        "appointmentscheduled",
+        30000,
+        isoDaysFromNow(60),
+        "Not invoiced",
+        [{ name: "Enterprise license T2", quantity: 1, amount: 30000 }],
         null,
         "existingbusiness",
+        "nimbus-ent-2026",
+        ["nimbus-ent-2025"],
       ),
     ],
     tickets: [
@@ -193,6 +211,32 @@ const COMPANIES: Record<string, MockCompany> = {
       mkDeal("New business", "qualifiedtobuy", 18000, isoDaysFromNow(55), "Not invoiced", [
         { name: "Logistics Pro (annual)", quantity: 1, amount: 18000 },
       ]),
+      // Churn pair: 2025 closed-won baseline, 2026 closed-LOST renewal → NRR 0% (the
+      // pair still appears; the lost renewal retains $0).
+      mkDeal(
+        "Freight 2025",
+        "closedwon",
+        15000,
+        isoMonthsAgo(10),
+        "Paid",
+        [{ name: "Freight plan (annual)", quantity: 1, amount: 15000 }],
+        "INV-7777",
+        "existingbusiness",
+        "orbit-freight-2025",
+        ["orbit-freight-2026"],
+      ),
+      mkDeal(
+        "Freight 2026 renewal",
+        "closedlost",
+        15000,
+        isoDaysFromNow(30),
+        "Not invoiced",
+        [{ name: "Freight plan (annual)", quantity: 1, amount: 15000 }],
+        null,
+        "existingbusiness",
+        "orbit-freight-2026",
+        ["orbit-freight-2025"],
+      ),
     ],
     tickets: [],
   },
@@ -360,6 +404,21 @@ export function mockCompaniesForScope(kind: string, value: string): { id: string
   const matches = (d: Deal) => (kind === "product" ? d.products.some((p) => p.name === value) : d.dealType === value);
   return Object.entries(COMPANIES)
     .filter(([, c]) => c.deals.some(matches))
+    .map(([id, c]) => ({ id, name: c.company.name }));
+}
+
+// All products available across the mock deals (stands in for the HubSpot products library).
+export function mockProducts(): string[] {
+  const names = new Set<string>();
+  for (const c of Object.values(COMPANIES)) for (const d of c.deals) for (const p of d.products) names.add(p.name);
+  return [...names];
+}
+
+// Companies that have a deal carrying any of the selected products (Overview2 scan).
+export function mockCompaniesForProducts(products: string[]): { id: string; name: string }[] {
+  const wanted = new Set(products);
+  return Object.entries(COMPANIES)
+    .filter(([, c]) => c.deals.some((d) => d.products.some((p) => wanted.has(p.name))))
     .map(([id, c]) => ({ id, name: c.company.name }));
 }
 

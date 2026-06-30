@@ -7,11 +7,12 @@ import express from "express";
 import cors from "cors";
 import { cached, clearCache } from "./cache";
 import { assembleSummary } from "./assemble";
-import { mockClientRaw, mockCompaniesForScope, mockOverviewOptions, mockList, mockResolve } from "./mock";
-import { hasLiveKeys, hasStripe, liveClientRaw, liveCompaniesForScope, liveOverviewOptions, liveList, liveResolve } from "./live";
+import { mockClientRaw, mockCompaniesForProducts, mockCompaniesForScope, mockOverviewOptions, mockProducts, mockList, mockResolve } from "./mock";
+import { hasLiveKeys, hasStripe, liveClientRaw, liveCompaniesForProducts, liveCompaniesForScope, liveOverviewOptions, liveProducts, liveList, liveResolve } from "./live";
 import { authorizeUrl, exchangeCode, hasCredentials, hasQbo } from "./qbo";
 import { buildOverview, buildOverviewRow } from "./overview";
-import type { ClientListItem, ClientSummary, CompanyResolution, Overview, ScopeOption } from "../shared/types";
+import { buildOverview2 } from "./overview2";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview, Overview2, ScopeOption } from "../shared/types";
 
 const app = express();
 app.use(cors());
@@ -157,6 +158,38 @@ app.get("/api/overview", async (req, res) => {
     res.json(overview);
   } catch (err) {
     fail(res, 502, "Failed to load overview", err);
+  }
+});
+
+// --- Overview2: product + closed-year, deal-pair NRR ---
+
+// Products available to pick from (the HubSpot Products library).
+app.get("/api/products", async (_req, res) => {
+  try {
+    const products = await cached("products", async () => (LIVE ? liveProducts() : mockProducts()));
+    res.json(products);
+  } catch (err) {
+    fail(res, 502, "Failed to load products", err);
+  }
+});
+
+// Build Overview2 for the selected products + closed year.
+app.get("/api/overview2", async (req, res) => {
+  const products = String(req.query.products ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const year = Number(req.query.year);
+  if (!products.length || !Number.isFinite(year)) {
+    return res.status(400).json({ error: "products (comma-separated) and year query params are required" });
+  }
+  try {
+    const key = `overview2:${[...products].sort().join("+")}:${year}`;
+    const result = await cached<Overview2>(key, async () => {
+      const companies = LIVE ? await liveCompaniesForProducts(products) : mockCompaniesForProducts(products);
+      const raws = await Promise.all(companies.map((c) => (LIVE ? liveClientRaw(c.id) : mockClientRaw(c.id))));
+      return { ...buildOverview2(raws, products, year), mock: !LIVE };
+    });
+    res.json(result);
+  } catch (err) {
+    fail(res, 502, "Failed to load overview2", err);
   }
 });
 

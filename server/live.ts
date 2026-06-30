@@ -109,6 +109,47 @@ export async function liveOverviewOptions(): Promise<ScopeOption[]> {
   ];
 }
 
+// All products available in the HubSpot Products library (for the Overview2 picker).
+export async function liveProducts(): Promise<string[]> {
+  const hs = await hubspotClient();
+  const names = new Set<string>();
+  let after: string | undefined;
+  do {
+    const res: any = await hs.crm.products.basicApi.getPage(100, after, ["name"]);
+    for (const p of res.results ?? []) {
+      const n = p.properties?.name as string;
+      if (n) names.add(n);
+    }
+    after = res.paging?.next?.after;
+  } while (after);
+  return [...names];
+}
+
+// Companies that have a deal carrying any of the selected products (Overview2 scan):
+// line item search by name → line_item→deal→company.
+export async function liveCompaniesForProducts(products: string[]): Promise<{ id: string; name: string }[]> {
+  const hs = await hubspotClient();
+  const companyIds = new Set<string>();
+  for (const product of products) {
+    let after: string | undefined;
+    do {
+      const res: any = await hs.crm.lineItems.searchApi.doSearch({
+        filterGroups: [{ filters: [{ propertyName: "name", operator: "EQ", value: product }] }],
+        properties: ["name"],
+        limit: 100,
+        after,
+      } as any);
+      for (const li of res.results ?? []) {
+        for (const dealId of await assoc(hs, "line_items", li.id, "deals")) {
+          (await assoc(hs, "deals", dealId, "companies")).forEach((cid) => companyIds.add(cid));
+        }
+      }
+      after = res.paging?.next?.after;
+    } while (after);
+  }
+  return batchCompanyNames(hs, companyIds);
+}
+
 async function batchCompanyNames(hs: any, ids: Set<string>): Promise<{ id: string; name: string }[]> {
   if (!ids.size) return [];
   const inputs = [...ids].map((id) => ({ id }));
@@ -264,7 +305,10 @@ async function fetchDeals(hs: any, id: string): Promise<Deal[]> {
       const stageId = (p.dealstage as string) || "";
       const meta = stageMap.get(stageId);
       const products = await fetchLineItems(hs, dealId);
+      const associatedDealIds = await assoc(hs, "deals", dealId, "deals");
       return {
+        id: dealId,
+        associatedDealIds,
         name: (p.dealname as string) || "Deal",
         stage: stageId.toLowerCase(),
         stageLabel: meta?.label ?? stageId,

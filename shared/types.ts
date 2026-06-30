@@ -36,6 +36,8 @@ export interface Deal {
   paymentStatus: PaymentStatus;
   products: DealProduct[];
   dealType: string; // HubSpot `dealtype` value (e.g. "newbusiness"); "" if unset
+  id?: string; // HubSpot deal id (or mock slug) — used to resolve deal-to-deal pairs
+  associatedDealIds?: string[]; // ids of HubSpot deals associated to this one
   // Billing invoice number that corresponds to this deal (carried from the CRM, or
   // matched to an invoice by amount + close date in assemble). null when none maps.
   invoiceNumber?: string | null;
@@ -180,6 +182,59 @@ export interface OverviewRow {
   wonValue: number; // sum of closed-won deal amounts in scope
   invoiceNumbers: string[]; // invoice numbers matched to those won deals
   missingInvoice: boolean; // a won deal had no corresponding invoice → warning
+}
+
+// --- Overview2: product + closed-year, deal-pair NRR (one row per reference-pair) ---
+
+// One mutual deal-to-deal reference pair: a realized (closed-won) baseline and its
+// associated renewal/upgrade. Pairs without a closed-won baseline are excluded.
+export interface Overview2Row {
+  companyId: string;
+  companyName: string;
+  originalName: string; // baseline (realized) deal name
+  currentName: string; // renewal (associated) deal name
+  originalProducts: string[]; // baseline deal's products (shown even if not selected)
+  currentProducts: string[]; // renewal deal's products (shown even if not selected)
+  originalAmount: number; // baseline deal amount
+  currentAmount: number; // renewal deal amount (retained — 0 if renewal lost)
+  nrr: number | null; // currentAmount ÷ originalAmount × 100
+  originalCloseDate: string; // baseline close date
+  expectedCloseDate: string; // renewal (expected) close date
+  pipelineStatus: string; // the renewal deal's pipeline stage label
+  // The renewal's stage metadata, for an approximate HubSpot-style stage color
+  // (the HubSpot API doesn't expose stage colors, so we derive from these).
+  pipelineProbability: number;
+  pipelineIsClosed: boolean;
+  pipelineIsWon: boolean;
+  invoiceNumber: string | null; // from the realized (won) baseline
+  // Payment cross-referenced with QuickBooks: CRM status + whether QBO corroborates.
+  payment: { crmStatus: PaymentStatus; qboMatched: boolean; qboStatus: string | null };
+}
+
+// A trend line: cumulative realized OR expected income for one calendar year.
+export interface Overview2Series {
+  label: string; // "Realized (2025)" / "Expected (2026)"
+  kind: "realized" | "expected";
+  year: number;
+}
+
+// One calendar month (Jan–Dec) of the trend: each series' cumulative value at that
+// month + the deals that closed in that month (for the hover drill-down).
+export interface Overview2Month {
+  month: string; // "Jan" … "Dec"
+  values: Record<string, number>; // series label → cumulative value
+  deals: { year: number; kind: "realized" | "expected"; company: string; name: string; amount: number }[];
+}
+
+export interface Overview2 {
+  rows: Overview2Row[];
+  products: string[]; // echoed selection
+  year: number; // echoed closed-year
+  series: Overview2Series[]; // one realized line per close-year + one expected line per expected-close-year
+  months: Overview2Month[]; // always 12 (Jan–Dec), cumulative within each year
+  // NRR distribution across the reference-pair rows.
+  nrrHealth: { expanding: number; flat: number; contracting: number; noData: number; average: number | null };
+  mock: boolean;
 }
 
 export interface Overview {

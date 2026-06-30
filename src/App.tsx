@@ -5,6 +5,7 @@ import Dashboard from "./components/Dashboard";
 import Sidebar from "./components/Sidebar";
 import CompanySelect from "./components/CompanySelect";
 import OverviewPage from "./components/OverviewPage";
+import Overview2Page from "./components/Overview2Page";
 import ScopeSelect from "./components/ScopeSelect";
 import LoadingBar from "./components/LoadingBar";
 import DetailsModal, { type ContribField } from "./components/DetailsModal";
@@ -13,7 +14,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 export default function App() {
   const [clients, setClients] = useState<ClientListItem[]>([]);
-  const [view, setView] = useState<"dashboard" | "overview">("dashboard");
+  const [view, setView] = useState<"dashboard" | "overview" | "overview2">("dashboard");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [companyId, setCompanyId] = useState<string>("");
   const [resolution, setResolution] = useState<CompanyResolution | null>(null);
@@ -203,6 +204,9 @@ export default function App() {
           <button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}>
             Overview
           </button>
+          <button className={view === "overview2" ? "active" : ""} onClick={() => setView("overview2")}>
+            Overview2
+          </button>
         </div>
         {view === "dashboard" && <CompanySelect companies={clients} value={companyId} onChange={setCompanyId} />}
         <div className="spacer" />
@@ -227,6 +231,10 @@ export default function App() {
               progress={ovProgress && ovProgress.total > 0 ? { current: ovProgress.current, total: ovProgress.total } : undefined}
             />
           )}
+        </main>
+      ) : view === "overview2" ? (
+        <main className="main">
+          <Overview2Page onOpen={openCompany} />
         </main>
       ) : (
         <div className="layout">
