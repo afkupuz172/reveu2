@@ -13,6 +13,15 @@ export interface DealProduct {
   amount: number;
 }
 
+// A way to scope the portfolio overview: by a HubSpot deal type (`dealtype`) or by
+// a product (line-item name). Options reflect what's actually present on real deals.
+export type ScopeKind = "dealType" | "product";
+export interface ScopeOption {
+  kind: ScopeKind;
+  value: string; // dealtype value, or product/line-item name
+  label: string; // display label
+}
+
 // A HubSpot deal enriched with pipeline stage, products, and payment status.
 export interface Deal {
   name: string;
@@ -26,6 +35,7 @@ export interface Deal {
   closeDate: string;
   paymentStatus: PaymentStatus;
   products: DealProduct[];
+  dealType: string; // HubSpot `dealtype` value (e.g. "newbusiness"); "" if unset
   // Billing invoice number that corresponds to this deal (carried from the CRM, or
   // matched to an invoice by amount + close date in assemble). null when none maps.
   invoiceNumber?: string | null;
@@ -166,10 +176,15 @@ export interface OverviewRow {
   openDealCount: number;
   openDealValue: number; // sum of open (not-closed) deal amounts
   paymentsDue: number; // count of deals with Pending/Overdue payment
+  // Scoped to the selected deal type / product (when the overview is built for one):
+  wonValue: number; // sum of closed-won deal amounts in scope
+  invoiceNumbers: string[]; // invoice numbers matched to those won deals
+  missingInvoice: boolean; // a won deal had no corresponding invoice → warning
 }
 
 export interface Overview {
   companies: OverviewRow[];
+  scope: ScopeOption | null; // what this overview was scoped to (null = all)
   // Portfolio revenue by calendar month: this year overlaid on last year.
   revenue: { months: string[]; currentYear: number[]; lastYear: number[] };
   // Distribution of NRR across the portfolio.

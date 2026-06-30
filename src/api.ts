@@ -1,4 +1,4 @@
-import type { ClientListItem, ClientSummary, CompanyResolution, Overview, OverviewRow } from "../shared/types";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview, OverviewRow, ScopeOption } from "../shared/types";
 
 export interface OverviewRowResponse {
   row: OverviewRow;
@@ -16,8 +16,18 @@ export const fetchClients = () => get<ClientListItem[]>("/api/clients");
 
 export const fetchResolve = (companyId: string) => get<CompanyResolution>(`/api/company/${companyId}/resolve`);
 
-export const fetchOverview = () => get<Overview>("/api/overview");
-export const fetchOverviewRow = (id: string) => get<OverviewRowResponse>(`/api/overview/row/${id}`);
+export const fetchOverviewOptions = () => get<ScopeOption[]>("/api/overview/options");
+
+const scopeQs = (scope?: { kind: string; value: string }) =>
+  scope ? `?kind=${encodeURIComponent(scope.kind)}&value=${encodeURIComponent(scope.value)}` : "";
+
+export const fetchOverviewCompanies = (scope: { kind: string; value: string }) =>
+  get<{ id: string; name: string }[]>(`/api/overview/companies${scopeQs(scope)}`);
+
+export const fetchOverview = (scope?: { kind: string; value: string }) => get<Overview>(`/api/overview${scopeQs(scope)}`);
+
+export const fetchOverviewRow = (id: string, scope?: { kind: string; value: string }) =>
+  get<OverviewRowResponse>(`/api/overview/row/${id}${scopeQs(scope)}`);
 
 // stripeIds/qboIds: array of resource ids (empty = none), undefined = server default.
 export function fetchClient(

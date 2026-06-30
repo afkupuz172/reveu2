@@ -43,9 +43,19 @@ interface Persona {
     stage: string;
     amount: number;
     payment: "Paid" | "Pending" | "Overdue" | "Not invoiced";
+    dealType: string; // HubSpot `dealtype` (e.g. "newbusiness" / "existingbusiness")
+    closeMonthsAgo: number; // close date; negative = months in the future (open deals)
     products: { name: string; quantity: number; amount: number }[];
   }[];
   tickets: { subject: string; stage: string }[];
+}
+
+// Close date relative to now (positive = past). Negative months land in the future
+// for open deals' expected-close dates.
+function isoMonthsAgo(n: number): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() - n);
+  return d.toISOString();
 }
 
 const PERSONAS: Persona[] = [
@@ -57,8 +67,9 @@ const PERSONAS: Persona[] = [
     mrr: 1200,
     overdue: false,
     deals: [
-      { name: "Pro renewal 2026", stage: "closedwon", amount: 14400, payment: "Paid", products: [{ name: "Pro Plan (annual)", quantity: 1, amount: 14400 }] },
-      { name: "Add-on seats", stage: "presentationscheduled", amount: 3600, payment: "Not invoiced", products: [{ name: "Additional seats", quantity: 6, amount: 3600 }] },
+      { name: "Pro subscription 2025", stage: "closedwon", amount: 12000, payment: "Paid", dealType: "existingbusiness", closeMonthsAgo: 14, products: [{ name: "Pro Plan (annual)", quantity: 1, amount: 12000 }] },
+      { name: "Pro renewal 2026", stage: "closedwon", amount: 14400, payment: "Paid", dealType: "existingbusiness", closeMonthsAgo: 2, products: [{ name: "Pro Plan (annual)", quantity: 1, amount: 14400 }] },
+      { name: "Add-on seats", stage: "presentationscheduled", amount: 3600, payment: "Not invoiced", dealType: "existingbusiness", closeMonthsAgo: -1, products: [{ name: "Additional seats", quantity: 6, amount: 3600 }] },
     ],
     tickets: [{ subject: "API rate limit question", stage: "4" }],
   },
@@ -71,8 +82,9 @@ const PERSONAS: Persona[] = [
     overdue: true,
     // closed-won ($12k) deliberately != annualized Stripe ($9k) to demo reconciliation.
     deals: [
-      { name: "Growth plan", stage: "closedwon", amount: 12000, payment: "Overdue", products: [{ name: "Growth Plan (annual)", quantity: 1, amount: 12000 }] },
-      { name: "Enterprise upgrade", stage: "decisionmakerboughtin", amount: 24000, payment: "Pending", products: [{ name: "Enterprise license", quantity: 1, amount: 18000 }, { name: "Onboarding services", quantity: 1, amount: 6000 }] },
+      { name: "Growth plan 2025", stage: "closedwon", amount: 12000, payment: "Paid", dealType: "existingbusiness", closeMonthsAgo: 13, products: [{ name: "Growth Plan (annual)", quantity: 1, amount: 12000 }] },
+      { name: "Growth renewal", stage: "closedwon", amount: 9000, payment: "Overdue", dealType: "existingbusiness", closeMonthsAgo: 1, products: [{ name: "Growth Plan (annual)", quantity: 1, amount: 9000 }] },
+      { name: "Enterprise upgrade", stage: "decisionmakerboughtin", amount: 24000, payment: "Pending", dealType: "existingbusiness", closeMonthsAgo: -1, products: [{ name: "Enterprise license", quantity: 1, amount: 18000 }, { name: "Onboarding services", quantity: 1, amount: 6000 }] },
     ],
     tickets: [
       { subject: "Billing discrepancy", stage: "1" },
@@ -86,7 +98,10 @@ const PERSONAS: Persona[] = [
     plan: null, // intentionally unlinked — no Stripe customer
     mrr: 0,
     overdue: false,
-    deals: [{ name: "New business", stage: "qualifiedtobuy", amount: 18000, payment: "Not invoiced", products: [{ name: "Logistics Pro (annual)", quantity: 1, amount: 18000 }] }],
+    deals: [
+      { name: "Logistics annual", stage: "closedwon", amount: 18000, payment: "Pending", dealType: "newbusiness", closeMonthsAgo: 1, products: [{ name: "Logistics Pro (annual)", quantity: 1, amount: 18000 }] },
+      { name: "New business", stage: "qualifiedtobuy", amount: 18000, payment: "Not invoiced", dealType: "newbusiness", closeMonthsAgo: -2, products: [{ name: "Logistics Pro (annual)", quantity: 1, amount: 18000 }] },
+    ],
     tickets: [],
   },
 ];
@@ -235,6 +250,8 @@ async function seedHubSpot(p: Persona, stripeCustomerId: string | null) {
         dealstage: d.stage,
         amount: String(d.amount),
         pipeline: "default",
+        dealtype: d.dealType,
+        closedate: isoMonthsAgo(d.closeMonthsAgo),
         [DEAL_PAYMENT_PROP]: d.payment,
       },
       associations: [],

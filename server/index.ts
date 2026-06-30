@@ -7,11 +7,11 @@ import express from "express";
 import cors from "cors";
 import { cached, clearCache } from "./cache";
 import { assembleSummary } from "./assemble";
-import { mockClientRaw, mockList, mockResolve } from "./mock";
-import { hasLiveKeys, hasStripe, liveClientRaw, liveList, liveResolve } from "./live";
+import { mockClientRaw, mockCompaniesForScope, mockOverviewOptions, mockList, mockResolve } from "./mock";
+import { hasLiveKeys, hasStripe, liveClientRaw, liveCompaniesForScope, liveOverviewOptions, liveList, liveResolve } from "./live";
 import { authorizeUrl, exchangeCode, hasCredentials, hasQbo } from "./qbo";
 import { buildOverview, buildOverviewRow } from "./overview";
-import type { ClientListItem, ClientSummary, CompanyResolution, Overview } from "../shared/types";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview, ScopeOption } from "../shared/types";
 
 const app = express();
 app.use(cors());
@@ -105,15 +105,54 @@ app.get("/api/clients", async (_req, res) => {
   }
 });
 
-// Portfolio overview across all companies (NRR, billing status, alignment,
-// revenue overlay, NRR health distribution).
-app.get("/api/overview", async (_req, res) => {
+// Scope options (deal types + products in use) for the overview selector.
+app.get("/api/overview/options", async (_req, res) => {
   try {
-    const overview = await cached<Overview>("overview", async () => {
-      if (!LIVE) return buildOverview(mockList().map((id) => mockClientRaw(id)), true);
-      const companies = await liveList();
+    const options = await cached("overview-options", async () => (LIVE ? liveOverviewOptions() : mockOverviewOptions()));
+    res.json(options);
+  } catch (err) {
+    fail(res, 502, "Failed to load overview options", err);
+  }
+});
+
+// Parse ?kind=dealType|product&value=… into a scope, or null. Unknown kinds → null.
+function parseScope(req: express.Request): ScopeOption | null {
+  const kind = String(req.query.kind ?? "");
+  const value = String(req.query.value ?? "");
+  if ((kind !== "dealType" && kind !== "product") || !value) return null;
+  // label is cosmetic here; the client supplies the real label from its option list.
+  return { kind, value, label: value };
+}
+const scopeKey = (s: ScopeOption | null) => (s ? `${s.kind}:${s.value}` : "all");
+
+// Companies that have a deal matching the scope — the optimized scan that drives the
+// progressive overview (only these companies are then collected).
+app.get("/api/overview/companies", async (req, res) => {
+  const scope = parseScope(req);
+  if (!scope) return res.status(400).json({ error: "kind (dealType|product) and value query params are required" });
+  try {
+    const companies = await cached(`overview-companies:${scopeKey(scope)}`, async () =>
+      LIVE ? liveCompaniesForScope(scope.kind, scope.value) : mockCompaniesForScope(scope.kind, scope.value),
+    );
+    res.json(companies);
+  } catch (err) {
+    fail(res, 502, "Failed to load companies for scope", err);
+  }
+});
+
+// Portfolio overview across all companies (NRR, billing status, alignment,
+// revenue overlay, NRR health distribution). Optional ?kind&value scopes it.
+app.get("/api/overview", async (req, res) => {
+  const scope = parseScope(req);
+  try {
+    const overview = await cached<Overview>(`overview:${scopeKey(scope)}`, async () => {
+      if (!LIVE) {
+        const ids = scope ? mockCompaniesForScope(scope.kind, scope.value).map((c) => c.id) : mockList();
+        return buildOverview(ids.map((id) => mockClientRaw(id)), true, scope);
+      }
+      const companies = scope ? await liveCompaniesForScope(scope.kind, scope.value) : await liveList();
       const raws = await Promise.all(companies.map((c) => liveClientRaw(c.id)));
-      return buildOverview(raws, false);
+      return buildOverview(raws, false, scope);
     });
     res.json(overview);
   } catch (err) {
@@ -122,13 +161,14 @@ app.get("/api/overview", async (_req, res) => {
 });
 
 // One company's overview row + revenue buckets — lets the client load the
-// portfolio progressively and report which company it's collecting.
+// portfolio progressively. ?kind&value scopes NRR/invoices/ratification.
 app.get("/api/overview/row/:id", async (req, res) => {
   const { id } = req.params;
+  const scope = parseScope(req);
   try {
-    const result = await cached(`overview-row:${id}`, async () => {
+    const result = await cached(`overview-row:${id}:${scopeKey(scope)}`, async () => {
       const raw = LIVE ? await liveClientRaw(id) : mockClientRaw(id);
-      const r = buildOverviewRow(raw);
+      const r = buildOverviewRow(raw, scope);
       return { row: r.row, revenue: { currentYear: r.currentYear, lastYear: r.lastYear }, mock: !LIVE };
     });
     res.json(result);

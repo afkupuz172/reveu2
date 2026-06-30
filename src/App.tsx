@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { fetchClient, fetchClients, fetchOverviewRow, fetchResolve } from "./api";
-import type { ClientListItem, ClientSummary, CompanyResolution, Overview } from "../shared/types";
+import { fetchClient, fetchClients, fetchOverviewCompanies, fetchOverviewOptions, fetchOverviewRow, fetchResolve } from "./api";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview, ScopeOption } from "../shared/types";
 import Dashboard from "./components/Dashboard";
 import Sidebar from "./components/Sidebar";
 import CompanySelect from "./components/CompanySelect";
 import OverviewPage from "./components/OverviewPage";
+import ScopeSelect from "./components/ScopeSelect";
 import LoadingBar from "./components/LoadingBar";
 import DetailsModal, { type ContribField } from "./components/DetailsModal";
 
@@ -24,6 +25,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [loadPhase, setLoadPhase] = useState<"idle" | "list" | "resolving" | "billing">("list");
   const [ovProgress, setOvProgress] = useState<{ current: number; total: number; detail: string } | null>(null);
+  // Overview is scoped to a deal type or product chosen before it loads.
+  const [scopeOptions, setScopeOptions] = useState<ScopeOption[]>([]);
+  const [overviewScope, setOverviewScope] = useState<ScopeOption | null>(null);
 
   // 1. Load companies.
   useEffect(() => {
@@ -88,23 +92,38 @@ export default function App() {
     };
   }, [resolution, stripeSel, qboSel, companyId]);
 
-  // Overview: load progressively so we can report which company is being collected.
+  // Load the scope options (deal types + products) once the user opens the Overview
+  // tab, so they can pick a scope before anything heavy loads.
   useEffect(() => {
-    if (view !== "overview" || overview) return;
+    if (view !== "overview" || scopeOptions.length) return;
     let cancelled = false;
+    fetchOverviewOptions()
+      .then((o) => !cancelled && setScopeOptions(o))
+      .catch((e) => !cancelled && setError(String(e)));
+    return () => {
+      cancelled = true;
+    };
+  }, [view, scopeOptions.length]);
+
+  // Overview: once a scope is chosen, fetch only the companies with a matching deal,
+  // then collect each progressively so we can report what's loading.
+  useEffect(() => {
+    if (view !== "overview" || !overviewScope || overview) return;
+    let cancelled = false;
+    const scope = overviewScope;
     (async () => {
       setError(null);
-      setOvProgress({ current: 0, total: 0, detail: "Loading company list from HubSpot…" });
+      setOvProgress({ current: 0, total: 0, detail: `Finding companies for ${scope.label}…` });
       try {
-        const list = clients.length ? clients : await fetchClients();
+        const list = await fetchOverviewCompanies(scope);
         const cy = Array<number>(12).fill(0);
         const ly = Array<number>(12).fill(0);
         const rows = [];
         let mock = false;
         for (let i = 0; i < list.length; i++) {
           if (cancelled) return;
-          setOvProgress({ current: i, total: list.length, detail: `Collecting Stripe & QuickBooks data for ${list[i].name}` });
-          const r = await fetchOverviewRow(list[i].id);
+          setOvProgress({ current: i, total: list.length, detail: `Collecting billing for ${list[i].name}` });
+          const r = await fetchOverviewRow(list[i].id, scope);
           rows.push(r.row);
           mock = r.mock;
           r.revenue.currentYear.forEach((v, m) => (cy[m] += v));
@@ -128,6 +147,7 @@ export default function App() {
         const average = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
         setOverview({
           companies: rows,
+          scope,
           revenue: { months: MONTHS, currentYear: cy, lastYear: ly },
           nrrHealth: { expanding, flat, contracting, noData, average },
           mock,
@@ -143,7 +163,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [view, overview, clients]);
+  }, [view, overviewScope, overview]);
 
   const toggle = (setter: typeof setStripeSel) => (id: string) =>
     setter((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -151,6 +171,18 @@ export default function App() {
   const openCompany = (id: string) => {
     setCompanyId(id);
     setView("dashboard");
+  };
+
+  // Pick a scope (deal type or product) for the overview (clears any prior one so it rebuilds).
+  const selectScope = (option: ScopeOption) => {
+    setOverview(null);
+    setError(null);
+    setOverviewScope(option);
+  };
+  // Back to the scope chooser.
+  const changeScope = () => {
+    setOverview(null);
+    setOverviewScope(null);
   };
 
   return (
@@ -184,8 +216,10 @@ export default function App() {
 
       {view === "overview" ? (
         <main className="main">
-          {overview ? (
-            <OverviewPage data={overview} onOpen={openCompany} />
+          {!overviewScope ? (
+            <ScopeSelect options={scopeOptions} onSelect={selectScope} />
+          ) : overview ? (
+            <OverviewPage data={overview} onOpen={openCompany} onChangeScope={changeScope} />
           ) : (
             <LoadingBar
               title="Building portfolio overview"

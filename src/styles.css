@@ -108,6 +108,16 @@ select:focus, button:focus { outline: 2px solid var(--accent); }
 .badge.muted { background: var(--panel-2); color: var(--muted); }
 .badge.stripe { background: rgba(99,91,255,.16); color: #9b94ff; }
 .badge.qbo { background: rgba(44,160,28,.18); color: #4fcf5f; }
+.badge.accent { background: rgba(91,140,255,.16); color: var(--accent); }
+
+/* Scope chooser (deal types + products, shown before the overview loads) */
+.scope-group { margin-top: 16px; }
+.dealtype-grid { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.dealtype-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  min-width: 200px; padding: 16px; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.dealtype-card:hover { border-color: var(--accent); }
+.dealtype-label { font-size: 16px; font-weight: 600; color: var(--text); }
 
 .mock-banner {
   background: rgba(91,140,255,.12); border: 1px solid rgba(91,140,255,.35);

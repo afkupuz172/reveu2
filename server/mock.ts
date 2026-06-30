@@ -5,7 +5,7 @@
 //   orbit  — no Stripe; TWO QBO candidates (name vs name+domain)
 //   acme   — stored Stripe reference id + a clean QBO match
 
-import type { CompanyResolution, Contact, Deal, DealProduct, PaymentStatus, RawClientData } from "../shared/types";
+import type { CompanyResolution, Contact, Deal, DealProduct, PaymentStatus, RawClientData, ScopeOption } from "../shared/types";
 import { rankCandidates, type ResourceRecord } from "./match";
 import { combineResources } from "./combine";
 
@@ -26,6 +26,7 @@ function mkDeal(
   paymentStatus: PaymentStatus,
   products: DealProduct[],
   invoiceNumber: string | null = null,
+  dealType: string = "newbusiness",
 ): Deal {
   const m = STAGE_META[stage] ?? { label: stage, prob: 50, closed: false, won: false };
   return {
@@ -41,6 +42,7 @@ function mkDeal(
     paymentStatus,
     products,
     invoiceNumber,
+    dealType,
   };
 }
 
@@ -106,6 +108,7 @@ const COMPANIES: Record<string, MockCompany> = {
         "Paid",
         [{ name: "Pro Plan (annual)", quantity: 1, amount: 12000 }],
         "INV-1066",
+        "existingbusiness",
       ),
       mkDeal(
         "Pro renewal 2026",
@@ -115,10 +118,18 @@ const COMPANIES: Record<string, MockCompany> = {
         "Paid",
         [{ name: "Pro Plan (annual)", quantity: 1, amount: 14400 }],
         "INV-1071",
+        "existingbusiness",
       ),
-      mkDeal("Add-on seats", "presentationscheduled", 3600, isoDaysFromNow(20), "Not invoiced", [
-        { name: "Additional seats", quantity: 6, amount: 3600 },
-      ]),
+      mkDeal(
+        "Add-on seats",
+        "presentationscheduled",
+        3600,
+        isoDaysFromNow(20),
+        "Not invoiced",
+        [{ name: "Additional seats", quantity: 6, amount: 3600 }],
+        null,
+        "existingbusiness",
+      ),
     ],
     tickets: [{ subject: "API rate limit question", status: "closed", createdAt: isoMonthsAgo(1) }],
   },
@@ -137,6 +148,7 @@ const COMPANIES: Record<string, MockCompany> = {
         "Paid",
         [{ name: "Growth Plan (annual)", quantity: 1, amount: 12000 }],
         "INV-2041",
+        "existingbusiness",
       ),
       mkDeal(
         "Growth renewal",
@@ -146,11 +158,21 @@ const COMPANIES: Record<string, MockCompany> = {
         "Overdue",
         [{ name: "Growth Plan (annual)", quantity: 1, amount: 9000 }],
         "INV-2052",
+        "existingbusiness",
       ),
-      mkDeal("Enterprise upgrade", "decisionmakerboughtin", 24000, isoDaysFromNow(40), "Pending", [
-        { name: "Enterprise license", quantity: 1, amount: 18000 },
-        { name: "Onboarding services", quantity: 1, amount: 6000 },
-      ]),
+      mkDeal(
+        "Enterprise upgrade",
+        "decisionmakerboughtin",
+        24000,
+        isoDaysFromNow(40),
+        "Pending",
+        [
+          { name: "Enterprise license", quantity: 1, amount: 18000 },
+          { name: "Onboarding services", quantity: 1, amount: 6000 },
+        ],
+        null,
+        "existingbusiness",
+      ),
     ],
     tickets: [
       { subject: "Billing discrepancy", status: "open", createdAt: isoDaysFromNow(-9) },
@@ -309,6 +331,36 @@ const qboRecords = (): ResourceRecord[] =>
 
 export function mockList(): string[] {
   return Object.keys(COMPANIES);
+}
+
+const DEAL_TYPE_LABELS: Record<string, string> = {
+  newbusiness: "New Business",
+  existingbusiness: "Existing Business",
+};
+
+// Scope options reflecting what's actually present on the mock deals: distinct deal
+// types + distinct products in use.
+export function mockOverviewOptions(): ScopeOption[] {
+  const dealTypes = new Set<string>();
+  const products = new Set<string>();
+  for (const c of Object.values(COMPANIES)) {
+    for (const d of c.deals) {
+      if (d.dealType) dealTypes.add(d.dealType);
+      for (const p of d.products) products.add(p.name);
+    }
+  }
+  return [
+    ...[...dealTypes].map((v) => ({ kind: "dealType" as const, value: v, label: DEAL_TYPE_LABELS[v] ?? v })),
+    ...[...products].map((n) => ({ kind: "product" as const, value: n, label: n })),
+  ];
+}
+
+// Companies with at least one deal matching the scope (deal type, or product).
+export function mockCompaniesForScope(kind: string, value: string): { id: string; name: string }[] {
+  const matches = (d: Deal) => (kind === "product" ? d.products.some((p) => p.name === value) : d.dealType === value);
+  return Object.entries(COMPANIES)
+    .filter(([, c]) => c.deals.some(matches))
+    .map(([id, c]) => ({ id, name: c.company.name }));
 }
 
 export function mockResolve(companyId: string): CompanyResolution {

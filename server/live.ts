@@ -2,7 +2,7 @@
 // SDKs are imported lazily so the app still boots (in mock mode) even if the
 // packages aren't installed yet. Only reached when both env keys are present.
 
-import type { Contact, CompanyResolution, Deal, DealProduct, PaymentStatus, RawClientData, ResourceCandidate } from "../shared/types";
+import type { Contact, CompanyResolution, Deal, DealProduct, PaymentStatus, RawClientData, ResourceCandidate, ScopeOption } from "../shared/types";
 import { rankCandidates, type ResourceRecord } from "./match";
 import { combineResources, type SelQbo, type SelStripe } from "./combine";
 import { fetchQbo, fetchQboById, hasQbo, searchQboCandidates } from "./qbo";
@@ -62,6 +62,102 @@ export async function liveList(): Promise<{ id: string; name: string; domain: st
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+// Scope options the portfolio can be filtered by — reflecting what's ACTUALLY on
+// real HubSpot deals: the distinct deal types in use (labelled from the `dealtype`
+// property) plus the distinct products in use (line-item names). Not the full
+// property option list / product library — only values present on real records.
+export async function liveOverviewOptions(): Promise<ScopeOption[]> {
+  const hs = await hubspotClient();
+
+  // dealtype value → display label (for nicer labels on the in-use values).
+  const labelMap = new Map<string, string>();
+  try {
+    const prop = await hs.crm.properties.coreApi.getByName("deals", "dealtype");
+    for (const o of prop.options ?? []) labelMap.set(o.value as string, (o.label as string) || (o.value as string));
+  } catch {
+    /* labels are best-effort */
+  }
+
+  // Distinct deal types actually present on deals.
+  const dealTypes = new Set<string>();
+  let after: string | undefined;
+  do {
+    const res: any = await hs.crm.deals.searchApi.doSearch({ filterGroups: [], properties: ["dealtype"], limit: 100, after } as any);
+    for (const d of res.results ?? []) {
+      const v = d.properties?.dealtype as string;
+      if (v) dealTypes.add(v);
+    }
+    after = res.paging?.next?.after;
+  } while (after);
+
+  // Distinct products actually used (line-item names).
+  const products = new Set<string>();
+  after = undefined;
+  do {
+    const res: any = await hs.crm.lineItems.searchApi.doSearch({ filterGroups: [], properties: ["name"], limit: 100, after } as any);
+    for (const li of res.results ?? []) {
+      const n = li.properties?.name as string;
+      if (n) products.add(n);
+    }
+    after = res.paging?.next?.after;
+  } while (after);
+
+  return [
+    ...[...dealTypes].map((v) => ({ kind: "dealType" as const, value: v, label: labelMap.get(v) ?? v })),
+    ...[...products].map((n) => ({ kind: "product" as const, value: n, label: n })),
+  ];
+}
+
+async function batchCompanyNames(hs: any, ids: Set<string>): Promise<{ id: string; name: string }[]> {
+  if (!ids.size) return [];
+  const inputs = [...ids].map((id) => ({ id }));
+  const read: any = await hs.crm.companies.batchApi.read({ inputs, properties: ["name"], propertiesWithHistory: [] } as any);
+  return (read.results ?? []).map((c: any) => ({ id: c.id, name: (c.properties?.name as string) || "(unnamed)" }));
+}
+
+// Optimized portfolio scan: collect only the companies that have a deal matching the
+// scope (a deal of a given `dealtype`, or a deal carrying a given product), rather
+// than listing every company. Names resolved via batch read.
+export async function liveCompaniesForScope(kind: string, value: string): Promise<{ id: string; name: string }[]> {
+  const hs = await hubspotClient();
+  const companyIds = new Set<string>();
+  let after: string | undefined;
+
+  if (kind === "product") {
+    // Products live on line items → walk line item → deal → company.
+    do {
+      const res: any = await hs.crm.lineItems.searchApi.doSearch({
+        filterGroups: [{ filters: [{ propertyName: "name", operator: "EQ", value }] }],
+        properties: ["name"],
+        limit: 100,
+        after,
+      } as any);
+      for (const li of res.results ?? []) {
+        for (const dealId of await assoc(hs, "line_items", li.id, "deals")) {
+          (await assoc(hs, "deals", dealId, "companies")).forEach((cid) => companyIds.add(cid));
+        }
+      }
+      after = res.paging?.next?.after;
+    } while (after);
+  } else {
+    // Deal type → deal search by dealtype → companies.
+    do {
+      const res: any = await hs.crm.deals.searchApi.doSearch({
+        filterGroups: [{ filters: [{ propertyName: "dealtype", operator: "EQ", value }] }],
+        properties: ["dealname"],
+        limit: 100,
+        after,
+      } as any);
+      for (const d of res.results ?? []) {
+        (await assoc(hs, "deals", d.id, "companies")).forEach((cid) => companyIds.add(cid));
+      }
+      after = res.paging?.next?.after;
+    } while (after);
+  }
+
+  return batchCompanyNames(hs, companyIds);
+}
 
 // Request the company with the optional QBO-id property, falling back if that
 // custom property doesn't exist in this portal (HubSpot 400s on unknown props).
@@ -157,7 +253,7 @@ async function fetchDeals(hs: any, id: string): Promise<Deal[]> {
   const dealIds = await associatedIds(hs, id, "deals");
   return Promise.all(
     dealIds.map(async (dealId) => {
-      const base = ["dealname", "dealstage", "amount", "closedate", "pipeline"];
+      const base = ["dealname", "dealstage", "amount", "closedate", "pipeline", "dealtype"];
       let d;
       try {
         d = await hs.crm.deals.basicApi.getById(dealId, [...base, DEAL_PAYMENT_PROP]);
@@ -180,6 +276,7 @@ async function fetchDeals(hs: any, id: string): Promise<Deal[]> {
         closeDate: (p.closedate as string) || new Date().toISOString(),
         paymentStatus: ((p[DEAL_PAYMENT_PROP] as PaymentStatus) || "Not invoiced") as PaymentStatus,
         products,
+        dealType: (p.dealtype as string) || "",
       };
     }),
   );

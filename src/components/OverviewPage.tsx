@@ -9,8 +9,18 @@ const srcClass = (s: string) => (s === "stripe" ? "stripe" : s === "quickbooks" 
 
 type SortKey = "name" | "nrr" | "billingSource" | "band" | "outstanding" | "aligned" | "openDealValue" | "paymentsDue";
 
-export default function OverviewPage({ data, onOpen }: { data: Overview; onOpen: (id: string) => void }) {
+export default function OverviewPage({
+  data,
+  onOpen,
+  onChangeScope,
+}: {
+  data: Overview;
+  onOpen: (id: string) => void;
+  onChangeScope: () => void;
+}) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "name", dir: 1 });
+  const scopeLabel = data.scope?.label ?? "All deals";
+  const scopeKind = data.scope?.kind === "product" ? "Product" : "Deal type";
 
   const val = (r: OverviewRow, k: SortKey): string | number =>
     k === "nrr"
@@ -43,12 +53,21 @@ export default function OverviewPage({ data, onOpen }: { data: Overview; onOpen:
     <div>
       <div className="card hero">
         <div style={{ flex: 1 }}>
-          <div className="company-name">Portfolio overview · {data.companies.length} companies</div>
+          <div className="company-name">
+            Portfolio overview · {data.companies.length} companies{" "}
+            <span className="badge accent" title={scopeKind}>
+              {scopeLabel}
+            </span>
+          </div>
           <div className="summary">
             Average NRR {average != null ? `${average}%` : "—"} · {expanding} expanding · {contracting} contracting ·{" "}
-            {data.companies.filter((c) => !c.aligned).length} with Stripe/QuickBooks conflicts.
+            {data.companies.filter((c) => !c.aligned).length} with Stripe/QuickBooks conflicts ·{" "}
+            {data.companies.filter((c) => c.missingInvoice).length} with a missing invoice.
           </div>
         </div>
+        <button className="icon-btn" onClick={onChangeScope} title="Change scope">
+          Change scope
+        </button>
       </div>
 
       <div className="grid cols-2">
@@ -74,6 +93,7 @@ export default function OverviewPage({ data, onOpen }: { data: Overview; onOpen:
               <Th k="billingSource" label="Billing" />
               <Th k="band" label="Status" />
               <Th k="nrr" label="NRR" />
+              <th>Invoice</th>
               <Th k="outstanding" label="Outstanding" />
               <Th k="openDealValue" label="Open deals" />
               <Th k="paymentsDue" label="Payments due" />
@@ -91,6 +111,20 @@ export default function OverviewPage({ data, onOpen }: { data: Overview; onOpen:
                   <span className={`badge ${bandClass(r.band)}`}>{r.band}</span>
                 </td>
                 <td>{r.nrr != null ? `${r.nrr}%` : "—"}</td>
+                <td>
+                  {r.invoiceNumbers.length > 0 && (
+                    <span>
+                      {r.invoiceNumbers[0]}
+                      {r.invoiceNumbers.length > 1 ? <span className="muted"> +{r.invoiceNumbers.length - 1}</span> : null}
+                    </span>
+                  )}{" "}
+                  {r.missingInvoice && (
+                    <span className="badge risk" title="A won deal of this type has no matching invoice">
+                      ⚠ missing
+                    </span>
+                  )}
+                  {!r.invoiceNumbers.length && !r.missingInvoice && <span className="muted">—</span>}
+                </td>
                 <td>{usd(r.outstanding)}</td>
                 <td>
                   {r.openDealCount > 0 ? (
