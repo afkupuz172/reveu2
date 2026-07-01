@@ -237,6 +237,42 @@ export interface Overview2 {
   mock: boolean;
 }
 
+// --- Overview4: price+year, deal-only data (no company/QBO fetch) ---
+// One reference pair built purely from HubSpot deal properties.
+export interface Overview4Row {
+  companyId: string; // hs_primary_associated_company (id only — no name fetched)
+  originalName: string;
+  currentName: string;
+  originalLineItems: number; // hs_num_of_associated_line_items
+  currentLineItems: number;
+  originalAmount: number;
+  currentAmount: number;
+  originalArr: number; // hs_arr
+  currentArr: number;
+  originalMrr: number; // hs_mrr
+  currentMrr: number;
+  cusNrr: number | null; // amount-based (renewal ÷ baseline amount) — drives NRR health
+  hbNrr: number | null; // recurring-based (renewal ÷ baseline ARR, MRR×12 fallback)
+  originalCloseDate: string;
+  expectedCloseDate: string;
+  pipelineStatus: string;
+  pipelineProbability: number;
+  pipelineIsClosed: boolean;
+  pipelineIsWon: boolean;
+  dealType: string;
+}
+
+export interface Overview4 {
+  rows: Overview4Row[];
+  min: number;
+  max: number;
+  year: number;
+  series: Overview2Series[]; // amount-based cumulative trend (reuses the Overview2 charts)
+  months: Overview2Month[];
+  nrrHealth: { expanding: number; flat: number; contracting: number; noData: number; average: number | null };
+  mock: boolean;
+}
+
 export interface Overview {
   companies: OverviewRow[];
   scope: ScopeOption | null; // what this overview was scoped to (null = all)

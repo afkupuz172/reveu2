@@ -7,12 +7,12 @@ import express from "express";
 import cors from "cors";
 import { cached, clearCache } from "./cache";
 import { assembleSummary } from "./assemble";
-import { mockClientRaw, mockCompaniesForProducts, mockCompaniesForScope, mockOverviewOptions, mockProducts, mockList, mockResolve } from "./mock";
-import { hasLiveKeys, hasStripe, liveClientRaw, liveCompaniesForProducts, liveCompaniesForScope, liveOverviewOptions, liveProducts, liveList, liveResolve } from "./live";
+import { mockClientRaw, mockCompaniesForPriceYear, mockCompaniesForProducts, mockCompaniesForScope, mockOverview4, mockOverviewOptions, mockProducts, mockList, mockResolve } from "./mock";
+import { hasLiveKeys, hasStripe, liveClientRaw, liveOverview3Raws, liveOverview4, liveCompaniesForProducts, liveCompaniesForScope, liveOverviewOptions, liveProducts, liveList, liveResolve } from "./live";
 import { authorizeUrl, exchangeCode, hasCredentials, hasQbo } from "./qbo";
 import { buildOverview, buildOverviewRow } from "./overview";
-import { buildOverview2 } from "./overview2";
-import type { ClientListItem, ClientSummary, CompanyResolution, Overview, Overview2, ScopeOption } from "../shared/types";
+import { buildOverview2, buildOverview3 } from "./overview2";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview, Overview2, Overview4, ScopeOption } from "../shared/types";
 
 const app = express();
 app.use(cors());
@@ -190,6 +190,47 @@ app.get("/api/overview2", async (req, res) => {
     res.json(result);
   } catch (err) {
     fail(res, 502, "Failed to load overview2", err);
+  }
+});
+
+// --- Overview3: deal price-range + closed-year, deal-pair NRR ---
+app.get("/api/overview3", async (req, res) => {
+  const minPrice = Number(req.query.min);
+  const maxPrice = Number(req.query.max);
+  const year = Number(req.query.year);
+  if (![minPrice, maxPrice, year].every(Number.isFinite) || minPrice > maxPrice) {
+    return res.status(400).json({ error: "min, max and year query params are required (min ≤ max)" });
+  }
+  try {
+    const result = await cached<Overview2>(`overview3:${minPrice}-${maxPrice}:${year}`, async () => {
+      const raws = LIVE
+        ? await liveOverview3Raws(minPrice, maxPrice, year)
+        : mockCompaniesForPriceYear(minPrice, maxPrice, year).map((c) => mockClientRaw(c.id));
+      return { ...buildOverview3(raws, minPrice, maxPrice, year), mock: !LIVE };
+    });
+    res.json(result);
+  } catch (err) {
+    fail(res, 502, "Failed to load overview3", err);
+  }
+});
+
+// --- Overview4: price-range + closed-year, deal-only (3 HubSpot calls, no billing) ---
+app.get("/api/overview4", async (req, res) => {
+  const minPrice = Number(req.query.min);
+  const maxPrice = Number(req.query.max);
+  const year = Number(req.query.year);
+  if (![minPrice, maxPrice, year].every(Number.isFinite) || minPrice > maxPrice) {
+    return res.status(400).json({ error: "min, max and year query params are required (min ≤ max)" });
+  }
+  try {
+    const result = await cached<Overview4>(`overview4:${minPrice}-${maxPrice}:${year}`, async () =>
+      LIVE
+        ? { ...(await liveOverview4(minPrice, maxPrice, year)), mock: false }
+        : { ...mockOverview4(minPrice, maxPrice, year), mock: true },
+    );
+    res.json(result);
+  } catch (err) {
+    fail(res, 502, "Failed to load overview4", err);
   }
 });
 

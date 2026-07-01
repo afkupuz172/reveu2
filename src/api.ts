@@ -1,4 +1,4 @@
-import type { ClientListItem, ClientSummary, CompanyResolution, Overview, Overview2, OverviewRow, ScopeOption } from "../shared/types";
+import type { ClientListItem, ClientSummary, CompanyResolution, Overview, Overview2, Overview4, OverviewRow, ScopeOption } from "../shared/types";
 
 export interface OverviewRowResponse {
   row: OverviewRow;
@@ -34,6 +34,12 @@ export const fetchProducts = () => get<string[]>("/api/products");
 
 export const fetchOverview2 = (products: string[], year: number) =>
   get<Overview2>(`/api/overview2?products=${encodeURIComponent(products.join(","))}&year=${year}`);
+
+export const fetchOverview3 = (min: number, max: number, year: number) =>
+  get<Overview2>(`/api/overview3?min=${min}&max=${max}&year=${year}`);
+
+export const fetchOverview4 = (min: number, max: number, year: number) =>
+  get<Overview4>(`/api/overview4?min=${min}&max=${max}&year=${year}`);
 
 // stripeIds/qboIds: array of resource ids (empty = none), undefined = server default.
 export function fetchClient(

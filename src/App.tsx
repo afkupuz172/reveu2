@@ -6,6 +6,8 @@ import Sidebar from "./components/Sidebar";
 import CompanySelect from "./components/CompanySelect";
 import OverviewPage from "./components/OverviewPage";
 import Overview2Page from "./components/Overview2Page";
+import Overview3Page from "./components/Overview3Page";
+import Overview4Page from "./components/Overview4Page";
 import ScopeSelect from "./components/ScopeSelect";
 import LoadingBar from "./components/LoadingBar";
 import DetailsModal, { type ContribField } from "./components/DetailsModal";
@@ -14,7 +16,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 export default function App() {
   const [clients, setClients] = useState<ClientListItem[]>([]);
-  const [view, setView] = useState<"dashboard" | "overview" | "overview2">("dashboard");
+  const [view, setView] = useState<"dashboard" | "overview" | "overview2" | "overview3" | "overview4">("dashboard");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [companyId, setCompanyId] = useState<string>("");
   const [resolution, setResolution] = useState<CompanyResolution | null>(null);
@@ -207,6 +209,12 @@ export default function App() {
           <button className={view === "overview2" ? "active" : ""} onClick={() => setView("overview2")}>
             Overview2
           </button>
+          <button className={view === "overview3" ? "active" : ""} onClick={() => setView("overview3")}>
+            Overview3
+          </button>
+          <button className={view === "overview4" ? "active" : ""} onClick={() => setView("overview4")}>
+            Overview4
+          </button>
         </div>
         {view === "dashboard" && <CompanySelect companies={clients} value={companyId} onChange={setCompanyId} />}
         <div className="spacer" />
@@ -235,6 +243,14 @@ export default function App() {
       ) : view === "overview2" ? (
         <main className="main">
           <Overview2Page onOpen={openCompany} />
+        </main>
+      ) : view === "overview3" ? (
+        <main className="main">
+          <Overview3Page onOpen={openCompany} />
+        </main>
+      ) : view === "overview4" ? (
+        <main className="main">
+          <Overview4Page onOpen={openCompany} />
         </main>
       ) : (
         <div className="layout">

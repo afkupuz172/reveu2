@@ -23,9 +23,9 @@ interface BuiltPair {
 }
 
 // Build the reference pairs for one company: walk each deal's deal-to-deal
-// associations, keep a pair when a selected product is present AND a closed-won
-// baseline exists. Deduped by the unordered id set.
-function collectPairs(raw: RawClientData, wanted: Set<string>): BuiltPair[] {
+// associations, keep a pair when a member matches the `seed` predicate (product, or
+// price+year for Overview3) AND a closed-won baseline exists. Deduped by id set.
+function collectPairs(raw: RawClientData, seed: (d: Deal) => boolean): BuiltPair[] {
   const s = assembleSummary(raw); // enriched deals (invoice numbers) + billing (qbo)
   const byId = new Map<string, Deal>();
   for (const d of s.deals) if (d.id) byId.set(d.id, d);
@@ -43,7 +43,7 @@ function collectPairs(raw: RawClientData, wanted: Set<string>): BuiltPair[] {
       seen.add(key);
 
       const members = [d, a];
-      if (!members.some((m) => m.products.some((p) => wanted.has(p.name)))) continue;
+      if (!members.some(seed)) continue;
 
       // Baseline = the OLDER (earlier-closing) deal. It must be closed-won (realized
       // revenue) — if the older deal is lost/unrealized it's new business, excluded.
@@ -103,8 +103,14 @@ function buildNrrHealth(nrrs: (number | null)[]): Overview2["nrrHealth"] {
   return { expanding, flat, contracting, noData, average };
 }
 
-export function buildOverview2(raws: RawClientData[], products: string[], year: number): Overview2 {
-  const wanted = new Set(products);
+// Shared builder: collect reference pairs whose members match `seed`, keep those
+// passing `includePair`, and produce the rows + per-year cumulative trend.
+function buildPayload(
+  raws: RawClientData[],
+  seed: (d: Deal) => boolean,
+  includePair: (baseline: Deal, renewal: Deal) => boolean,
+  meta: { products: string[]; year: number },
+): Overview2 {
   const rows: Overview2Row[] = [];
 
   // Per-year monthly buckets for the trend, plus the deals behind each calendar month.
@@ -129,9 +135,8 @@ export function buildOverview2(raws: RawClientData[], products: string[], year: 
   };
 
   for (const raw of raws) {
-    for (const p of collectPairs(raw, wanted)) {
-      // Closed-year filter: keep when either end of the pair closes in the selected year.
-      if (closeYear(p.baseline.closeDate) !== year && closeYear(p.renewal.closeDate) !== year) continue;
+    for (const p of collectPairs(raw, seed)) {
+      if (!includePair(p.baseline, p.renewal)) continue;
 
       const nrr = p.baseline.amount > 0 ? Math.round((p.renewalAmount / p.baseline.amount) * 100) : null;
       rows.push({
@@ -185,11 +190,33 @@ export function buildOverview2(raws: RawClientData[], products: string[], year: 
 
   return {
     rows,
-    products,
-    year,
+    products: meta.products,
+    year: meta.year,
     series,
     months,
     nrrHealth: buildNrrHealth(rows.map((r) => r.nrr)),
     mock: false,
   };
+}
+
+// Overview2: seed by product; keep pairs touching the selected year on either end.
+export function buildOverview2(raws: RawClientData[], products: string[], year: number): Overview2 {
+  const wanted = new Set(products);
+  return buildPayload(
+    raws,
+    (d) => d.products.some((p) => wanted.has(p.name)),
+    (baseline, renewal) => closeYear(baseline.closeDate) === year || closeYear(renewal.closeDate) === year,
+    { products, year },
+  );
+}
+
+// Overview3: seed by deal amount ∈ [min,max] closing in the year (either member); the
+// pair (and its associated deal) is then displayed the same way as Overview2.
+export function buildOverview3(raws: RawClientData[], minPrice: number, maxPrice: number, year: number): Overview2 {
+  return buildPayload(
+    raws,
+    (d) => d.amount >= minPrice && d.amount <= maxPrice && closeYear(d.closeDate) === year,
+    () => true, // the seed already constrains price + year
+    { products: [], year },
+  );
 }

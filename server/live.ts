@@ -2,10 +2,11 @@
 // SDKs are imported lazily so the app still boots (in mock mode) even if the
 // packages aren't installed yet. Only reached when both env keys are present.
 
-import type { Contact, CompanyResolution, Deal, DealProduct, PaymentStatus, RawClientData, ResourceCandidate, ScopeOption } from "../shared/types";
+import type { Contact, CompanyResolution, Deal, DealProduct, Overview4, PaymentStatus, RawClientData, ResourceCandidate, ScopeOption } from "../shared/types";
 import { rankCandidates, type ResourceRecord } from "./match";
 import { combineResources, type SelQbo, type SelStripe } from "./combine";
 import { fetchQbo, fetchQboById, hasQbo, searchQboCandidates } from "./qbo";
+import { buildOverview4, type O4Deal } from "./overview4";
 
 const STRIPE_ID_PROP = process.env.HUBSPOT_STRIPE_ID_PROPERTY || "stripe_customer_id";
 const QBO_ID_PROP = process.env.HUBSPOT_QBO_ID_PROPERTY || "quickbooks_customer_id";
@@ -41,6 +42,46 @@ async function stripeClient() {
 function daysSince(iso?: string): number {
   if (!iso) return 999;
   return Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000));
+}
+
+// --- HubSpot call throttling: bounded concurrency + 429 retry ---
+const chunk = <T>(arr: T[], size: number): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+};
+
+// Retry a call on HubSpot 429 (rate limit), honoring Retry-After when present.
+async function withRetry<T>(fn: () => Promise<T>, tries = 4): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e: unknown) {
+      const err = e as { code?: number; statusCode?: number; response?: { status?: number; headers?: Record<string, string> } };
+      const status = err?.code ?? err?.statusCode ?? err?.response?.status;
+      if (status === 429 && attempt < tries) {
+        const retryAfter = Number(err?.response?.headers?.["retry-after"]) || 0;
+        const wait = retryAfter > 0 ? retryAfter * 1000 : Math.min(4000, 250 * 2 ** attempt);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+// Run an async fn over items with bounded concurrency, each retried on 429.
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < items.length) {
+      const i = cursor++;
+      results[i] = await withRetry(() => fn(items[i], i));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 export async function liveList(): Promise<{ id: string; name: string; domain: string; stripeId: string | null }[]> {
@@ -235,6 +276,42 @@ async function assoc(hs: any, fromType: string, fromId: string, toType: string):
 // Company-anchored association (deals/tickets/contacts hang off the company).
 async function associatedIds(hs: any, id: string, toObjectType: string): Promise<string[]> {
   return assoc(hs, "companies", id, toObjectType);
+}
+
+// Batch v4 associations for many objects at once → Map<fromId, toId[]>. Replaces the
+// per-object assoc() N+1 (100 objects per call).
+async function batchAssoc(hs: any, fromType: string, toType: string, ids: string[]): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  for (const group of chunk(ids, 100)) {
+    const res: any = await withRetry(() =>
+      hs.crm.associations.v4.batchApi.getPage(fromType, toType, { inputs: group.map((id) => ({ id })) }),
+    );
+    for (const r of res.results ?? []) {
+      const fromId = r._from?.id ?? r.from?.id;
+      if (fromId) map.set(String(fromId), (r.to ?? []).map((t: any) => String(t.toObjectId)));
+    }
+  }
+  return map;
+}
+
+// Batch-read object properties → Map<id, properties> (100 objects per call).
+async function batchReadProps(api: { read: (body: any) => Promise<any> }, ids: string[], properties: string[]): Promise<Map<string, any>> {
+  const map = new Map<string, any>();
+  for (const group of chunk(ids, 100)) {
+    const res: any = await withRetry(() => api.read({ inputs: group.map((id) => ({ id })), properties, propertiesWithHistory: [] }));
+    for (const r of res.results ?? []) map.set(String(r.id), r.properties ?? {});
+  }
+  return map;
+}
+
+// Batch-read companies, falling back if the optional QBO-id property doesn't exist.
+async function batchReadCompanies(hs: any, ids: string[]): Promise<Map<string, any>> {
+  const base = ["name", "domain", "hubspot_owner_id", "lifecyclestage", "notes_last_updated", "hs_lastmodifieddate", STRIPE_ID_PROP];
+  try {
+    return await batchReadProps(hs.crm.companies.batchApi, ids, [...base, QBO_ID_PROP]);
+  } catch {
+    return await batchReadProps(hs.crm.companies.batchApi, ids, base);
+  }
 }
 
 const DEAL_PAYMENT_PROP = process.env.HUBSPOT_DEAL_PAYMENT_PROPERTY || "payment_status";
@@ -439,19 +516,15 @@ async function searchStripeCandidates(
 //   stripeId/qboId: undefined → default (stored ref / auto-match); null → off; string → that resource.
 // Build RawClientData for a company from chosen resource id lists (sum-all).
 //   stripeIds/qboIds: undefined → default (stored ref / auto-match); [] → none; [...] → those.
-export async function liveClientRaw(
-  id: string,
+// Resolve a company's Stripe + QuickBooks billing resources (default = the company's
+// stored refs / auto-match). Shared by the dashboard and the Overview3 lean path.
+async function resolveBilling(
+  f: { company: { name: string; domain: string }; stripeRef: string | null; qboRef: string | null },
   stripeIds?: string[],
   qboIds?: string[],
-): Promise<RawClientData> {
-  const hs = await hubspotClient();
-  const company = await getCompany(hs, id);
-  const f = companyFields(id, company.properties);
-  const [deals, tickets] = await Promise.all([fetchDeals(hs, id), fetchTickets(hs, id)]);
-
-  // Stripe resources (skipped entirely when no STRIPE_KEY is configured).
-  const sIds = stripeIds ?? (f.stripeRef ? [f.stripeRef] : []);
+): Promise<{ stripes: SelStripe[]; qbos: SelQbo[] }> {
   const stripes: SelStripe[] = [];
+  const sIds = stripeIds ?? (f.stripeRef ? [f.stripeRef] : []);
   if (sIds.length && hasStripe()) {
     const sc = await stripeClient();
     for (const sid of sIds) {
@@ -465,7 +538,6 @@ export async function liveClientRaw(
     }
   }
 
-  // QuickBooks resources.
   const qbos: SelQbo[] = [];
   if (hasQbo()) {
     let qIds: string[];
@@ -489,7 +561,235 @@ export async function liveClientRaw(
       }
     }
   }
+  return { stripes, qbos };
+}
 
+// Optimized Overview3 fetch: search the matched (price+year) deals WITH their
+// properties, then batch-read their associations (companies / paired deals / line
+// items) and the paired deals + line-item properties — instead of re-fetching every
+// company's full history via liveClientRaw. Per-company billing runs through a
+// bounded, 429-retrying pool. Returns one RawClientData per company (pair deals only).
+export async function liveOverview3Raws(minPrice: number, maxPrice: number, year: number): Promise<RawClientData[]> {
+  const hs = await hubspotClient();
+  const stageMap = await getStageMap(hs);
+  const start = Date.UTC(year, 0, 1);
+  const end = Date.UTC(year, 11, 31, 23, 59, 59, 999);
+  const dealProps = ["dealname", "dealstage", "amount", "closedate", "pipeline", "dealtype", DEAL_PAYMENT_PROP];
+
+  // 1. Search matching deals WITH full properties (no per-deal re-fetch).
+  const seedById = new Map<string, any>();
+  let after: string | undefined;
+  do {
+    const res: any = await withRetry(() =>
+      hs.crm.deals.searchApi.doSearch({
+        filterGroups: [
+          {
+            filters: [
+              { propertyName: "amount", operator: "GTE", value: String(minPrice) },
+              { propertyName: "amount", operator: "LTE", value: String(maxPrice) },
+              { propertyName: "closedate", operator: "GTE", value: String(start) },
+              { propertyName: "closedate", operator: "LTE", value: String(end) },
+            ],
+          },
+        ],
+        properties: dealProps,
+        limit: 100,
+        after,
+      } as any),
+    );
+    for (const d of res.results ?? []) seedById.set(String(d.id), d.properties ?? {});
+    after = res.paging?.next?.after;
+  } while (after);
+
+  const seedIds = [...seedById.keys()];
+  if (!seedIds.length) return [];
+
+  // 2. Batch associations for the seed deals (companies / paired deals / line items).
+  const [seedCompanies, seedPairs, seedLineItems] = await Promise.all([
+    batchAssoc(hs, "deals", "companies", seedIds),
+    batchAssoc(hs, "deals", "deals", seedIds),
+    batchAssoc(hs, "deals", "line_items", seedIds),
+  ]);
+
+  // 3. Paired (associated) deals not already fetched as seeds: properties + associations.
+  const pairIds = [...new Set([...seedPairs.values()].flat())].filter((id) => !seedById.has(id));
+  const pairProps = pairIds.length ? await batchReadProps(hs.crm.deals.batchApi, pairIds, dealProps) : new Map<string, any>();
+  const [pairPairs, pairLineItems] = pairIds.length
+    ? await Promise.all([batchAssoc(hs, "deals", "deals", pairIds), batchAssoc(hs, "deals", "line_items", pairIds)])
+    : [new Map<string, string[]>(), new Map<string, string[]>()];
+
+  // 4. Line-item properties for every involved deal, in one batch pass.
+  const allLiIds = [...new Set([...seedLineItems.values(), ...pairLineItems.values()].flat())];
+  const liProps = allLiIds.length
+    ? await batchReadProps(hs.crm.lineItems.batchApi, allLiIds, ["name", "quantity", "amount", "price", "hs_product_name"])
+    : new Map<string, any>();
+
+  const productsOf = (liIds: string[]): DealProduct[] =>
+    liIds.map((id) => {
+      const lp = liProps.get(id) ?? {};
+      const qty = Number(lp.quantity) || 1;
+      return { name: lp.name || lp.hs_product_name || "Item", quantity: qty, amount: Number(lp.amount) || (Number(lp.price) || 0) * qty };
+    });
+  const buildDeal = (id: string): Deal | null => {
+    const p = seedById.get(id) ?? pairProps.get(id);
+    if (!p) return null;
+    const stageId = String(p.dealstage ?? "");
+    const meta = stageMap.get(stageId);
+    const liMap = seedById.has(id) ? seedLineItems : pairLineItems;
+    const dealMap = seedById.has(id) ? seedPairs : pairPairs;
+    return {
+      id,
+      associatedDealIds: dealMap.get(id) ?? [],
+      name: (p.dealname as string) || "Deal",
+      stage: stageId.toLowerCase(),
+      stageLabel: meta?.label ?? stageId,
+      pipeline: meta?.pipeline ?? "Pipeline",
+      probability: meta?.prob ?? 0,
+      isClosed: meta?.closed ?? stageId.toLowerCase().startsWith("closed"),
+      isWon: meta?.won ?? stageId.toLowerCase().includes("won"),
+      amount: Number(p.amount) || 0,
+      closeDate: (p.closedate as string) || new Date().toISOString(),
+      paymentStatus: ((p[DEAL_PAYMENT_PROP] as PaymentStatus) || "Not invoiced") as PaymentStatus,
+      products: productsOf(liMap.get(id) ?? []),
+      dealType: (p.dealtype as string) || "",
+    };
+  };
+
+  // 5. Group each paired seed (+ its associated deals) under its company. Seeds with no
+  //    associated deal can't form a renewal pair, so their company isn't even fetched.
+  const dealsByCompany = new Map<string, Map<string, Deal>>();
+  const put = (cid: string, deal: Deal | null) => {
+    if (!deal?.id) return;
+    if (!dealsByCompany.has(cid)) dealsByCompany.set(cid, new Map());
+    dealsByCompany.get(cid)!.set(deal.id, deal);
+  };
+  for (const sid of seedIds) {
+    const pairs = seedPairs.get(sid) ?? [];
+    if (!pairs.length) continue;
+    const seedDeal = buildDeal(sid);
+    for (const cid of seedCompanies.get(sid) ?? []) {
+      put(cid, seedDeal);
+      for (const pid of pairs) put(cid, buildDeal(pid));
+    }
+  }
+
+  // 6. Company fields + billing, bounded concurrency (429-safe).
+  const companyIds = [...dealsByCompany.keys()];
+  if (!companyIds.length) return [];
+  const companyProps = await batchReadCompanies(hs, companyIds);
+  return mapPool(companyIds, 5, async (cid) => {
+    const f = companyFields(cid, companyProps.get(cid) ?? {});
+    const { stripes, qbos } = await resolveBilling(f);
+    const { stripe, qbo, contributions } = combineResources(stripes, qbos);
+    return {
+      company: f.company,
+      link: { status: stripes.length ? "linked" : "unlinked", stripeCustomerId: stripes[0]?.id ?? null },
+      lastActivityDays: f.lastActivityDays,
+      deals: [...dealsByCompany.get(cid)!.values()],
+      tickets: [],
+      stripe,
+      qbo,
+      contributions,
+      selectedStripeIds: stripes.map((s) => s.id),
+      selectedQuickbooksIds: qbos.map((q) => q.id),
+    } as RawClientData;
+  });
+}
+
+// Overview4: deal-only data in exactly THREE HubSpot calls (per ≤100 results) —
+// (1) search matched deal ids, (2) v4 batch association read (deal→deals) for the
+// pair map, (3) batch property read for the deduped seed+paired ids. No company-name
+// or QuickBooks fetch. (getStageMap is cached process-wide, used only for labels.)
+export async function liveOverview4(minPrice: number, maxPrice: number, year: number): Promise<Overview4> {
+  const hs = await hubspotClient();
+  const stageMap = await getStageMap(hs); // cached; labels only
+  const start = Date.UTC(year, 0, 1);
+  const end = Date.UTC(year, 11, 31, 23, 59, 59, 999);
+  const empty: Overview4 = { rows: [], min: minPrice, max: maxPrice, year, series: [], months: [], nrrHealth: { expanding: 0, flat: 0, contracting: 0, noData: 0, average: null }, mock: false };
+
+  // CALL 1: search deal ids in the price range closing in the year.
+  const seedIds = new Set<string>();
+  let after: string | undefined;
+  do {
+    const res: any = await withRetry(() =>
+      hs.crm.deals.searchApi.doSearch({
+        filterGroups: [
+          {
+            filters: [
+              { propertyName: "amount", operator: "GTE", value: String(minPrice) },
+              { propertyName: "amount", operator: "LTE", value: String(maxPrice) },
+              { propertyName: "closedate", operator: "GTE", value: String(start) },
+              { propertyName: "closedate", operator: "LTE", value: String(end) },
+            ],
+          },
+        ],
+        properties: [],
+        limit: 100,
+        after,
+      } as any),
+    );
+    for (const d of res.results ?? []) seedIds.add(String(d.id));
+    after = res.paging?.next?.after;
+  } while (after);
+  if (!seedIds.size) return empty;
+
+  // CALL 2: batch deal→deals associations → pair map + deduped id set.
+  const pairMap = await batchAssoc(hs, "deals", "deals", [...seedIds]);
+  const allIds = new Set<string>(seedIds);
+  for (const arr of pairMap.values()) for (const id of arr) allIds.add(id);
+
+  // CALL 3: batch-read the deal properties for every seed + paired id.
+  const props = await batchReadProps(hs.crm.deals.batchApi, [...allIds], [
+    "dealname",
+    "amount",
+    "closedate",
+    "dealstage",
+    "dealtype",
+    "hs_num_of_associated_line_items",
+    "hs_mrr",
+    "hs_arr",
+    "hs_primary_associated_company",
+    "hs_is_closed",
+    "hs_is_closed_won",
+    "hs_deal_stage_probability",
+  ]);
+
+  const truthy = (v: unknown) => String(v).toLowerCase() === "true";
+  const byId = new Map<string, O4Deal>();
+  for (const [id, p] of props) {
+    const stageId = String(p.dealstage ?? "");
+    const meta = stageMap.get(stageId);
+    byId.set(id, {
+      id,
+      name: (p.dealname as string) || "Deal",
+      amount: Number(p.amount) || 0,
+      arr: Number(p.hs_arr) || 0,
+      mrr: Number(p.hs_mrr) || 0,
+      lineItems: Number(p.hs_num_of_associated_line_items) || 0,
+      companyId: (p.hs_primary_associated_company as string) || "",
+      closeDate: (p.closedate as string) || new Date().toISOString(),
+      isWon: p.hs_is_closed_won != null ? truthy(p.hs_is_closed_won) : (meta?.won ?? false),
+      isClosed: p.hs_is_closed != null ? truthy(p.hs_is_closed) : (meta?.closed ?? stageId.toLowerCase().startsWith("closed")),
+      probability: p.hs_deal_stage_probability != null ? Math.round(Number(p.hs_deal_stage_probability) * 100) : (meta?.prob ?? 0),
+      stageLabel: meta?.label ?? stageId,
+      dealType: (p.dealtype as string) || "",
+    });
+  }
+
+  return buildOverview4(byId, pairMap, seedIds, minPrice, maxPrice, year);
+}
+
+export async function liveClientRaw(
+  id: string,
+  stripeIds?: string[],
+  qboIds?: string[],
+): Promise<RawClientData> {
+  const hs = await hubspotClient();
+  const company = await getCompany(hs, id);
+  const f = companyFields(id, company.properties);
+  const [deals, tickets] = await Promise.all([fetchDeals(hs, id), fetchTickets(hs, id)]);
+
+  const { stripes, qbos } = await resolveBilling(f, stripeIds, qboIds);
   const { stripe, qbo, contributions } = combineResources(stripes, qbos);
 
   return {

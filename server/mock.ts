@@ -5,9 +5,10 @@
 //   orbit  — no Stripe; TWO QBO candidates (name vs name+domain)
 //   acme   — stored Stripe reference id + a clean QBO match
 
-import type { CompanyResolution, Contact, Deal, DealProduct, PaymentStatus, RawClientData, ScopeOption } from "../shared/types";
+import type { CompanyResolution, Contact, Deal, DealProduct, Overview4, PaymentStatus, RawClientData, ScopeOption } from "../shared/types";
 import { rankCandidates, type ResourceRecord } from "./match";
 import { combineResources } from "./combine";
+import { buildOverview4, type O4Deal } from "./overview4";
 
 const STAGE_META: Record<string, { label: string; prob: number; closed: boolean; won: boolean }> = {
   appointmentscheduled: { label: "Appointment scheduled", prob: 20, closed: false, won: false },
@@ -420,6 +421,46 @@ export function mockCompaniesForProducts(products: string[]): { id: string; name
   return Object.entries(COMPANIES)
     .filter(([, c]) => c.deals.some((d) => d.products.some((p) => wanted.has(p.name))))
     .map(([id, c]) => ({ id, name: c.company.name }));
+}
+
+// Companies with a deal priced in [min,max] closing in `year` (Overview3 scan).
+export function mockCompaniesForPriceYear(minPrice: number, maxPrice: number, year: number): { id: string; name: string }[] {
+  return Object.entries(COMPANIES)
+    .filter(([, c]) =>
+      c.deals.some((d) => d.amount >= minPrice && d.amount <= maxPrice && new Date(d.closeDate).getUTCFullYear() === year),
+    )
+    .map(([id, c]) => ({ id, name: c.company.name }));
+}
+
+// Overview4 (deal-only): build the normalized deals + pair map from mock companies.
+// Mock stands in ARR = deal amount, MRR = amount/12, company = company id.
+export function mockOverview4(minPrice: number, maxPrice: number, year: number): Overview4 {
+  const byId = new Map<string, O4Deal>();
+  const pairMap = new Map<string, string[]>();
+  const seedIds = new Set<string>();
+  for (const [cid, c] of Object.entries(COMPANIES)) {
+    for (const d of c.deals) {
+      if (!d.id) continue; // only associated (paired) deals carry ids in mock
+      byId.set(d.id, {
+        id: d.id,
+        name: d.name,
+        amount: d.amount,
+        arr: d.amount,
+        mrr: Math.round(d.amount / 12),
+        lineItems: d.products.length,
+        companyId: cid,
+        closeDate: d.closeDate,
+        isWon: d.isWon,
+        isClosed: d.isClosed,
+        probability: d.probability,
+        stageLabel: d.stageLabel,
+        dealType: d.dealType,
+      });
+      if (d.associatedDealIds?.length) pairMap.set(d.id, d.associatedDealIds);
+      if (d.amount >= minPrice && d.amount <= maxPrice && new Date(d.closeDate).getUTCFullYear() === year) seedIds.add(d.id);
+    }
+  }
+  return buildOverview4(byId, pairMap, seedIds, minPrice, maxPrice, year);
 }
 
 export function mockResolve(companyId: string): CompanyResolution {
